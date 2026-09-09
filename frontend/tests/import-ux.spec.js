@@ -112,6 +112,30 @@ test.describe('EPUB import feedback', () => {
     await expect(page.locator('#operation-status-message')).toContainText(/已保存到服务器|已全部就绪/);
   });
 
+  test('hides an in-progress upload notice after five seconds', async ({ page }) => {
+    test.setTimeout(30_000);
+    const serverBook = makeServerBook();
+    let releaseUpload;
+    const uploadGate = new Promise(resolve => { releaseUpload = resolve; });
+
+    await installCommonRoutes(page, {
+      uploadHandler: async route => {
+        await uploadGate;
+        await route.fulfill({ status: 202, json: { created: true, book: serverBook } });
+      },
+    });
+
+    await page.goto('/index.html');
+    await page.setInputFiles('#file-input', FIXTURE);
+
+    await expect(page.locator('#operation-status-message')).toContainText('正在上传');
+    await expect(page.locator('#operation-status')).toBeHidden({ timeout: 7_000 });
+
+    releaseUpload();
+    await expect(page.locator('#operation-status-message')).toContainText(/已保存到服务器|已全部就绪/);
+    await expect(page.locator('#operation-status')).toBeVisible();
+  });
+
   test('keeps a failed upload readable and offers retry feedback', async ({ page }) => {
     await installCommonRoutes(page, {
       uploadHandler: async route => {

@@ -7,7 +7,7 @@
   <meta name="description" content="Marginalia - 阅读划线、读书感悟、内容创作与 Obsidian 导出">
   <link rel="manifest" href="manifest.json">
   <title>Marginalia</title>
-  <link rel="stylesheet" href="style.css?v=32">
+  <link rel="stylesheet" href="style.css?v=33">
   <script src="jszip.min.js"></script>
   <script src="epub.min.js"></script>
 </head>
@@ -105,25 +105,47 @@
             <strong id="reader-typography-title">阅读排版</strong>
             <span>仅调整正文显示，不改变书籍内容</span>
           </div>
-          <label class="reader-font-family-field" for="reader-font-family">
-            <span>阅读字体</span>
-            <select id="reader-font-family">
-              <option value="original">原书排版</option>
-              <option value="serif">宋体</option>
-              <option value="sans">黑体</option>
-              <option value="kai">楷体</option>
-            </select>
-          </label>
-          <div class="reader-font-size-field" role="group" aria-labelledby="reader-font-size-label">
-            <div class="reader-font-size-copy">
-              <span id="reader-font-size-label">正文字号</span>
-              <output id="reader-font-size-value" for="reader-font-size">100%</output>
+          <div class="reader-typography-fields">
+            <label class="reader-font-family-field" for="reader-font-family">
+              <span>阅读字体</span>
+              <select id="reader-font-family">
+                <option value="original">原书排版</option>
+                <option value="serif">宋体</option>
+                <option value="sans">黑体</option>
+                <option value="kai">楷体</option>
+              </select>
+            </label>
+            <div class="reader-font-size-field" role="group" aria-labelledby="reader-font-size-label">
+              <div class="reader-typography-value-row">
+                <span id="reader-font-size-label">正文字号</span>
+                <output id="reader-font-size-value" for="reader-font-size">100%</output>
+              </div>
+              <div class="reader-font-size-controls">
+                <button class="btn btn-ghost reader-font-step" id="btn-reader-font-decrease" type="button" aria-label="减小正文字号">A−</button>
+                <input id="reader-font-size" type="range" min="60" max="200" step="5" value="100" aria-label="正文字号百分比">
+                <button class="btn btn-ghost btn-sm" id="btn-reader-font-reset" type="button">恢复默认</button>
+                <button class="btn btn-ghost reader-font-step" id="btn-reader-font-increase" type="button" aria-label="增大正文字号">A＋</button>
+              </div>
             </div>
-            <div class="reader-font-size-controls">
-              <button class="btn btn-ghost reader-font-step" id="btn-reader-font-decrease" type="button" aria-label="减小正文字号">A−</button>
-              <input id="reader-font-size" type="range" min="60" max="200" step="5" value="100" aria-label="正文字号百分比">
-              <button class="btn btn-ghost btn-sm" id="btn-reader-font-reset" type="button">恢复默认</button>
-              <button class="btn btn-ghost reader-font-step" id="btn-reader-font-increase" type="button" aria-label="增大正文字号">A＋</button>
+            <div class="reader-spacing-field" role="group" aria-labelledby="reader-line-height-label">
+              <div class="reader-typography-value-row">
+                <span id="reader-line-height-label">行间距</span>
+                <output id="reader-line-height-value" for="reader-line-height">1.7</output>
+              </div>
+              <div class="reader-spacing-controls">
+                <input id="reader-line-height" type="range" min="1.2" max="2.4" step="0.1" value="1.7" aria-label="正文行间距">
+                <button class="btn btn-ghost btn-sm" id="btn-reader-line-height-reset" type="button">恢复默认</button>
+              </div>
+            </div>
+            <div class="reader-spacing-field" role="group" aria-labelledby="reader-paragraph-spacing-label">
+              <div class="reader-typography-value-row">
+                <span id="reader-paragraph-spacing-label">段落间距</span>
+                <output id="reader-paragraph-spacing-value" for="reader-paragraph-spacing">0.5em</output>
+              </div>
+              <div class="reader-spacing-controls">
+                <input id="reader-paragraph-spacing" type="range" min="0" max="2" step="0.1" value="0.5" aria-label="正文段落间距">
+                <button class="btn btn-ghost btn-sm" id="btn-reader-paragraph-spacing-reset" type="button">恢复默认</button>
+              </div>
             </div>
           </div>
         </section>
@@ -434,6 +456,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="app.js?v=33"></script>
+  <script src="app.js?v=36"></script>
 </body>
 </html>

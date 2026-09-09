@@ -977,21 +977,22 @@ body.reader-active .operation-status {
 .reader-typography {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(150px, 0.7fr) minmax(150px, 0.8fr) minmax(360px, 1.8fr);
-  align-items: end;
+  grid-template-columns: minmax(150px, 0.3fr) minmax(0, 2.7fr);
+  align-items: center;
   gap: 12px;
   padding-top: 11px;
   border-top: 1px solid rgba(157, 142, 118, 0.24);
 }
 
 .reader-typography-heading,
+.reader-typography-fields,
 .reader-font-family-field,
-.reader-font-size-field {
+.reader-font-size-field,
+.reader-spacing-field {
   min-width: 0;
 }
 
 .reader-typography-heading {
-  align-self: center;
   display: grid;
   gap: 2px;
 }
@@ -1003,21 +1004,29 @@ body.reader-active .operation-status {
 
 .reader-typography-heading span,
 .reader-font-family-field > span,
-.reader-font-size-copy {
+.reader-typography-value-row {
   color: var(--ink-muted);
   font-size: 11px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
+.reader-typography-fields {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.65fr) minmax(300px, 1.5fr) repeat(2, minmax(200px, 1fr));
+  align-items: end;
+  gap: 12px;
+}
+
 .reader-font-family-field,
-.reader-font-size-field {
+.reader-font-size-field,
+.reader-spacing-field {
   display: grid;
   gap: 5px;
 }
 
 .reader-font-family-field > span,
-.reader-font-size-copy span {
+.reader-typography-value-row span {
   color: var(--ink-soft);
   font-weight: 700;
 }
@@ -1027,28 +1036,37 @@ body.reader-active .operation-status {
   min-height: 40px;
 }
 
-.reader-font-size-copy {
+.reader-typography-value-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-#reader-font-size-value {
+.reader-typography-value-row output {
   color: var(--accent);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.reader-font-size-controls {
+.reader-font-size-controls,
+.reader-spacing-controls {
   min-width: 0;
   display: grid;
-  grid-template-columns: 42px minmax(90px, 1fr) auto 42px;
   align-items: center;
   gap: 7px;
 }
 
-.reader-font-size-controls .btn {
+.reader-font-size-controls {
+  grid-template-columns: 42px minmax(90px, 1fr) auto 42px;
+}
+
+.reader-spacing-controls {
+  grid-template-columns: minmax(80px, 1fr) auto;
+}
+
+.reader-font-size-controls .btn,
+.reader-spacing-controls .btn {
   min-width: 0;
   min-height: 40px;
   padding-inline: 9px;
@@ -1060,7 +1078,9 @@ body.reader-active .operation-status {
   font-weight: 700;
 }
 
-#reader-font-size {
+#reader-font-size,
+#reader-line-height,
+#reader-paragraph-spacing {
   min-width: 0;
   min-height: 24px;
   padding: 0;
@@ -2915,6 +2935,10 @@ body.reader-chrome-hidden .reader-chrome-reveal {
     grid-column: 1 / -1;
     min-height: 560px;
   }
+
+  .reader-typography-fields {
+    grid-template-columns: minmax(130px, 0.6fr) minmax(300px, 1.4fr);
+  }
 }
 
 @media (min-width: 901px) {
@@ -3146,16 +3170,17 @@ body.reader-chrome-hidden .reader-chrome-reveal {
   }
 
   .reader-typography {
-    grid-template-columns: minmax(130px, 0.7fr) minmax(0, 1.3fr);
+    grid-template-columns: minmax(0, 1fr);
     align-items: end;
   }
 
-  .reader-typography-heading {
-    grid-column: 1 / -1;
+  .reader-typography-fields {
+    grid-template-columns: minmax(130px, 0.7fr) minmax(0, 1.3fr);
   }
 
   .reader-font-family-field select,
-  .reader-font-size-controls .btn {
+  .reader-font-size-controls .btn,
+  .reader-spacing-controls .btn {
     min-height: 44px;
   }
 
@@ -3567,12 +3592,8 @@ body.reader-chrome-hidden .reader-chrome-reveal {
     grid-template-columns: 1fr;
   }
 
-  .reader-typography {
+  .reader-typography-fields {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .reader-typography-heading {
-    grid-column: auto;
   }
 
   .reader-font-size-controls {
@@ -3580,7 +3601,8 @@ body.reader-chrome-hidden .reader-chrome-reveal {
     gap: 5px;
   }
 
-  .reader-font-size-controls .btn {
+  .reader-font-size-controls .btn,
+  .reader-spacing-controls .btn {
     padding-inline: 7px;
   }
 

@@ -26,6 +26,13 @@
     sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
     kai: '"Kaiti SC", STKaiti, KaiTi, "楷体", serif',
   };
+  const READER_LINE_HEIGHT_DEFAULT = 1.7;
+  const READER_LINE_HEIGHT_MIN = 1.2;
+  const READER_LINE_HEIGHT_MAX = 2.4;
+  const READER_PARAGRAPH_SPACING_DEFAULT = 0.5;
+  const READER_PARAGRAPH_SPACING_MIN = 0;
+  const READER_PARAGRAPH_SPACING_MAX = 2;
+  const READER_SPACING_STEP = 0.1;
   const TTS_POSITION_KEY = 'marginalia.tts.position';
   const TTS_POLL_INTERVAL_MS = 1000;
   const TTS_CONTENT_BLOCK_SELECTOR = 'h1, h2, h3, h4, p, li, blockquote, figcaption';
@@ -76,10 +83,15 @@
   let wheelGestureLocked = false;
   let wheelFlipInProgress = false;
   let fontZoomLockUntil = 0;
+  let fontZoomAccumulatedDelta = 0;
+  let fontZoomResetTimer = null;
   const WHEEL_DELTA_THRESHOLD = 60;
+  const FONT_ZOOM_DELTA_THRESHOLD = 10;
   const WHEEL_IDLE_MS = 420;
   let currentFontSize = 100;  // percentage, 100 = default
   let currentReaderFontFamily = 'original';
+  let currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+  let currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
   const FONT_SIZE_STEP = 5;   // percent per scroll
   const FONT_SIZE_MIN = 60;
   const FONT_SIZE_MAX = 200;
@@ -192,6 +204,12 @@
     btnReaderFontDecrease: $('#btn-reader-font-decrease'),
     btnReaderFontReset: $('#btn-reader-font-reset'),
     btnReaderFontIncrease: $('#btn-reader-font-increase'),
+    readerLineHeight: $('#reader-line-height'),
+    readerLineHeightValue: $('#reader-line-height-value'),
+    btnReaderLineHeightReset: $('#btn-reader-line-height-reset'),
+    readerParagraphSpacing: $('#reader-paragraph-spacing'),
+    readerParagraphSpacingValue: $('#reader-paragraph-spacing-value'),
+    btnReaderParagraphSpacingReset: $('#btn-reader-paragraph-spacing-reset'),
     ttsPanel: $('#tts-panel'),
     ttsStatus: $('#tts-status'),
     ttsVoice: $('#tts-voice'),
@@ -879,12 +897,29 @@
     return Math.round(clamped / FONT_SIZE_STEP) * FONT_SIZE_STEP;
   }
 
+  function normalizeReaderSpacing(value, min, max, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    const clamped = Math.min(max, Math.max(min, parsed));
+    return Number((Math.round(clamped / READER_SPACING_STEP) * READER_SPACING_STEP).toFixed(1));
+  }
+
+  function formatReaderSpacing(value) {
+    return Number(value).toFixed(1);
+  }
+
   function updateReaderTypographyUI() {
     if (dom.readerFontFamily) dom.readerFontFamily.value = currentReaderFontFamily;
     if (dom.readerFontSize) dom.readerFontSize.value = String(currentFontSize);
     if (dom.readerFontSizeValue) dom.readerFontSizeValue.value = `${currentFontSize}%`;
     if (dom.btnReaderFontDecrease) dom.btnReaderFontDecrease.disabled = currentFontSize <= FONT_SIZE_MIN;
     if (dom.btnReaderFontIncrease) dom.btnReaderFontIncrease.disabled = currentFontSize >= FONT_SIZE_MAX;
+    if (dom.readerLineHeight) dom.readerLineHeight.value = formatReaderSpacing(currentReaderLineHeight);
+    if (dom.readerLineHeightValue) dom.readerLineHeightValue.value = formatReaderSpacing(currentReaderLineHeight);
+    if (dom.readerParagraphSpacing) dom.readerParagraphSpacing.value = formatReaderSpacing(currentReaderParagraphSpacing);
+    if (dom.readerParagraphSpacingValue) {
+      dom.readerParagraphSpacingValue.value = `${formatReaderSpacing(currentReaderParagraphSpacing)}em`;
+    }
   }
 
   function persistReaderTypographyPreference() {
@@ -892,6 +927,8 @@
       localStorage.setItem(READER_TYPOGRAPHY_KEY, JSON.stringify({
         fontFamily: currentReaderFontFamily,
         fontSize: currentFontSize,
+        lineHeight: currentReaderLineHeight,
+        paragraphSpacing: currentReaderParagraphSpacing,
       }));
     } catch (_err) {
       // The preference remains active for this session if storage is blocked.
@@ -901,6 +938,8 @@
   function loadReaderTypographyPreference() {
     currentReaderFontFamily = 'original';
     currentFontSize = 100;
+    currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+    currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
     try {
       const saved = JSON.parse(localStorage.getItem(READER_TYPOGRAPHY_KEY) || 'null');
       if (saved && typeof saved === 'object') {
@@ -908,10 +947,24 @@
           currentReaderFontFamily = saved.fontFamily;
         }
         currentFontSize = normalizeReaderFontSize(saved.fontSize);
+        currentReaderLineHeight = normalizeReaderSpacing(
+          saved.lineHeight,
+          READER_LINE_HEIGHT_MIN,
+          READER_LINE_HEIGHT_MAX,
+          READER_LINE_HEIGHT_DEFAULT
+        );
+        currentReaderParagraphSpacing = normalizeReaderSpacing(
+          saved.paragraphSpacing,
+          READER_PARAGRAPH_SPACING_MIN,
+          READER_PARAGRAPH_SPACING_MAX,
+          READER_PARAGRAPH_SPACING_DEFAULT
+        );
       }
     } catch (_err) {
       currentReaderFontFamily = 'original';
       currentFontSize = 100;
+      currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+      currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
     }
     updateReaderTypographyUI();
   }
@@ -920,18 +973,16 @@
     if (!doc || !doc.head || !doc.documentElement) return;
     const styleId = 'marginalia-reader-typography-style';
     const existingStyle = doc.getElementById(styleId);
-    if (currentReaderFontFamily === 'original') {
-      doc.documentElement.removeAttribute('data-marginalia-reader-font');
-      if (existingStyle) existingStyle.remove();
-      return;
-    }
-
     const fontStack = READER_FONT_STACKS[currentReaderFontFamily];
-    if (!fontStack) return;
-    doc.documentElement.setAttribute('data-marginalia-reader-font', currentReaderFontFamily);
+    if (fontStack) {
+      doc.documentElement.setAttribute('data-marginalia-reader-font', currentReaderFontFamily);
+    } else {
+      doc.documentElement.removeAttribute('data-marginalia-reader-font');
+    }
     const style = existingStyle || doc.createElement('style');
     style.id = styleId;
-    style.textContent = `body, body * { font-family: ${fontStack} !important; }`;
+    const fontRule = fontStack ? `body, body * { font-family: ${fontStack} !important; }\n` : '';
+    style.textContent = `${fontRule}:where(body, p, div, li, blockquote) { line-height: ${formatReaderSpacing(currentReaderLineHeight)} !important; }\n:where(p) { margin-block: ${formatReaderSpacing(currentReaderParagraphSpacing)}em !important; }`;
     if (!existingStyle) doc.head.appendChild(style);
   }
 
@@ -961,6 +1012,30 @@
 
   function setReaderFontFamily(value, { persist = true } = {}) {
     currentReaderFontFamily = READER_FONT_FAMILIES.has(value) ? value : 'original';
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
+  }
+
+  function setReaderLineHeight(value, { persist = true } = {}) {
+    currentReaderLineHeight = normalizeReaderSpacing(
+      value,
+      READER_LINE_HEIGHT_MIN,
+      READER_LINE_HEIGHT_MAX,
+      READER_LINE_HEIGHT_DEFAULT
+    );
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
+  }
+
+  function setReaderParagraphSpacing(value, { persist = true } = {}) {
+    currentReaderParagraphSpacing = normalizeReaderSpacing(
+      value,
+      READER_PARAGRAPH_SPACING_MIN,
+      READER_PARAGRAPH_SPACING_MAX,
+      READER_PARAGRAPH_SPACING_DEFAULT
+    );
     updateReaderTypographyUI();
     if (persist) persistReaderTypographyPreference();
     applyReaderTypography();
@@ -1699,6 +1774,7 @@
 
     serverMigrationsInFlight.add(book.id);
     let lastPersistedProgress = -10;
+    const uploadStatusExpiresAt = Date.now() + 5000;
     try {
       await setBookTransferState(book, 'uploading', 0);
       setOperationStatus({
@@ -1706,6 +1782,7 @@
         message: `正在上传《${book.book_title}》`,
         detail: '正文已经可以阅读，上传和 AI 索引会在后台继续',
         progress: 0,
+        autoHideMs: 5000,
       });
 
       const serverBook = await uploadBookToServer(
@@ -1718,16 +1795,20 @@
           book.transfer_status = rounded >= 100 ? 'verifying' : 'uploading';
           book.transfer_progress = rounded;
           updateBookTransferUI(book);
-          setOperationStatus({
-            bookId: book.id,
-            message: rounded >= 100
-              ? `服务器正在校验《${book.book_title}》`
-              : `正在上传《${book.book_title}》`,
-            detail: rounded >= 100
-              ? '文件已发送，正在保存并启动 AI 索引'
-              : '正文已经可以阅读，上传在后台继续',
-            progress: rounded,
-          });
+          const statusTimeRemaining = uploadStatusExpiresAt - Date.now();
+          if (statusTimeRemaining > 0) {
+            setOperationStatus({
+              bookId: book.id,
+              message: rounded >= 100
+                ? `服务器正在校验《${book.book_title}》`
+                : `正在上传《${book.book_title}》`,
+              detail: rounded >= 100
+                ? '文件已发送，正在保存并启动 AI 索引'
+                : '正文已经可以阅读，上传在后台继续',
+              progress: rounded,
+              autoHideMs: statusTimeRemaining,
+            });
+          }
           if (rounded - lastPersistedProgress >= 10) {
             lastPersistedProgress = rounded;
             dbPut('books', book).catch(() => {});
@@ -4452,12 +4533,23 @@
     if (!currentRendition || !currentRendition.themes) return;
 
     const delta = event.deltaY || event.detail || 0;
-    if (Math.abs(delta) < 10) return;
+    if (!delta) return;
 
     fontZoomLockUntil = Date.now() + WHEEL_IDLE_MS;
     resetWheelGesture();
+    if (fontZoomAccumulatedDelta && Math.sign(fontZoomAccumulatedDelta) !== Math.sign(delta)) {
+      fontZoomAccumulatedDelta = 0;
+    }
+    fontZoomAccumulatedDelta += delta;
+    if (fontZoomResetTimer) clearTimeout(fontZoomResetTimer);
+    fontZoomResetTimer = setTimeout(() => {
+      fontZoomAccumulatedDelta = 0;
+      fontZoomResetTimer = null;
+    }, WHEEL_IDLE_MS);
+    if (Math.abs(fontZoomAccumulatedDelta) < FONT_ZOOM_DELTA_THRESHOLD) return;
 
-    const direction = delta > 0 ? -1 : 1;
+    const direction = fontZoomAccumulatedDelta > 0 ? -1 : 1;
+    fontZoomAccumulatedDelta = 0;
     setReaderFontSize(currentFontSize + direction * FONT_SIZE_STEP);
   }
 
@@ -4489,7 +4581,6 @@
         font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
       }
       :where(p, li, blockquote) {
-        line-height: 1.72;
         orphans: 2;
         widows: 2;
       }
@@ -5823,7 +5914,7 @@
     return merged;
   }
 
-  async function syncToBackend() {
+  async function syncToBackend({ notify = true } = {}) {
     if (dom.btnSync.classList.contains('syncing')) return;
 
     dom.btnSync.classList.add('syncing');
@@ -5842,10 +5933,14 @@
       }
       await renderLibrary();
       await updateSyncBadge();
-      showToast(`已同步 ${syncedBooks} 本书的进度、书签和笔记`, 'success');
+      if (notify) {
+        showToast(`已同步 ${syncedBooks} 本书的进度、书签和笔记`, 'success');
+      }
     } catch (err) {
       console.error('Sync failed:', err);
-      showToast('同步失败，请检查后端是否运行', 'error');
+      if (notify) {
+        showToast('同步失败，请检查后端是否运行', 'error');
+      }
     } finally {
       dom.btnSync.classList.remove('syncing');
       dom.btnSync.disabled = false;
@@ -6307,6 +6402,18 @@
     dom.btnReaderFontIncrease.addEventListener('click', () => {
       setReaderFontSize(currentFontSize + FONT_SIZE_STEP);
     });
+    dom.readerLineHeight.addEventListener('input', () => {
+      setReaderLineHeight(dom.readerLineHeight.value);
+    });
+    dom.btnReaderLineHeightReset.addEventListener('click', () => {
+      setReaderLineHeight(READER_LINE_HEIGHT_DEFAULT);
+    });
+    dom.readerParagraphSpacing.addEventListener('input', () => {
+      setReaderParagraphSpacing(dom.readerParagraphSpacing.value);
+    });
+    dom.btnReaderParagraphSpacingReset.addEventListener('click', () => {
+      setReaderParagraphSpacing(READER_PARAGRAPH_SPACING_DEFAULT);
+    });
     dom.btnCloseNotesPanel.addEventListener('click', () => toggleNotesPanel(false));
     dom.readerPanelBackdrop.addEventListener('click', () => closeMobileReaderPanels({ restoreFocus: true }));
 
@@ -6514,7 +6621,7 @@
       showToast('网络已恢复，正在同步服务器书库', 'success');
       refreshServerLibrary().catch(() => {});
       migrateLocalBooksToServer().catch(() => {});
-      syncToBackend().catch(() => {});
+      syncToBackend({ notify: false }).catch(() => {});
     });
     window.addEventListener('offline', () => showToast('已离线 — 数据保存在本地', 'info'));
     window.addEventListener('resize', () => {
@@ -6548,7 +6655,7 @@
         }
         return;
       }
-      if (navigator.onLine) syncToBackend().catch(() => {});
+      if (navigator.onLine) syncToBackend({ notify: false }).catch(() => {});
       if (dom.readerView.classList.contains('active')) scheduleReaderChromeHide();
     });
   }
