@@ -14,6 +14,9 @@ test.describe('home page navigation', () => {
     await expect(page.locator('#library-view')).toHaveClass(/active/);
     await expect(page.locator('.home-nav')).toBeVisible();
     await expect(page.locator('.nav-tabs')).toHaveCount(0);
+    await expect(page.locator('#btn-book-chat')).toBeVisible();
+    await expect(page.locator('#btn-book-chat')).toHaveText('GPT 风格阅读');
+    await expect(page.locator('#btn-book-chat')).toHaveAttribute('href', '/book-chat/');
     await expect(page).toHaveURL(/#\/$/);
 
     await page.locator('#btn-library-create').click();
