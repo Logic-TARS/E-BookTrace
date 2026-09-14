@@ -15,9 +15,6 @@ function makeServerBook(overrides = {}) {
     filename: 'ux-server-book.epub',
     original_filename: 'multichapter.epub',
     content_hash: 'ux-fixture-hash',
-    knowledge_book_id: 'ux-knowledge-book',
-    knowledge_status: 'ready',
-    knowledge_error: '',
     ...overrides,
   };
 }
@@ -62,20 +59,6 @@ async function installCommonRoutes(page, { uploadHandler, fileHandler, books = [
           highlights: [],
         },
       });
-      return;
-    }
-    if (pathname.includes('/api/knowledge/books/')) {
-      await route.fulfill({
-        json: {
-          id: 'ux-knowledge-book',
-          status: 'ready',
-          error_message: '',
-        },
-      });
-      return;
-    }
-    if (pathname.endsWith('/conversations')) {
-      await route.fulfill({ json: { conversations: [], count: 0 } });
       return;
     }
     await route.fulfill({ status: 404, json: { detail: 'not mocked' } });

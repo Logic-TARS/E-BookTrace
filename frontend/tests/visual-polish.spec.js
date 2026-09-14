@@ -7,20 +7,17 @@ const book = {
   filename: 'visual-book.epub',
   original_filename: 'visual-book.epub',
   content_hash: 'visual-polish-hash',
-  knowledge_book_id: 'visual-knowledge',
-  knowledge_status: 'ready',
-  knowledge_error: '',
   state_revision: 0,
 };
 
 const material = {
   id: 'visual-highlight',
   book_id: book.id,
-  book_title: '一本用于验证创作工作台素材书名能够自然换行而不会挤进复选框窄列的超长中文书名',
+  book_title: '一本用于验证笔记管理页面素材书名能够自然换行并完整显示的超长中文书名',
   chapter: '关于文字布局与长内容呈现的章节',
   cfi: 'epubcfi(/6/4!/4/2/2)',
   highlight_text: '第一段摘录需要保留原始换行，并在内容列中自然折行。\n\n第二段包含无空格长英文串ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ。',
-  note: '这是一段很长的个人感悟，用来确认创作工作台不会把文字挤进二十六像素的复选框列，而是能够在真正的内容列里连续自然地换行并完整显示。\n下一段感悟也应保留换行。',
+  note: '这是一段很长的个人感悟，用来确认笔记管理页面能够在内容列里连续自然地换行并完整显示。即使屏幕变窄，也应保留所有摘录与思考，不出现文字重叠。\n下一段感悟也应保留换行。',
   tags: ['这是一个用于验证标签自动换行能力的超长中文标签', 'UnbrokenTagABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'],
   progress_percent: 67,
   status: 'raw',
@@ -62,14 +59,6 @@ async function mockShellApi(page) {
       } });
       return;
     }
-    if (pathname === '/api/drafts') {
-      await route.fulfill({ json: { drafts: [], count: 0 } });
-      return;
-    }
-    if (pathname === '/api/tts/voices') {
-      await route.fulfill({ json: { enabled: false, voices: [] } });
-      return;
-    }
     await route.fulfill({ status: 404, json: { detail: 'not mocked' } });
   });
 }
@@ -96,7 +85,7 @@ test.describe('visual polish structure', () => {
       await expect(page.locator('.book-card')).toHaveCount(1);
       await expect(page.locator('.book-card-cover-initial')).toHaveText('在');
       await expect(page.locator('.book-source-badge')).toHaveText('云端书库');
-      await expect(page.locator('.book-ai-badge')).toHaveAttribute('data-state', 'ready');
+      await expect(page.locator('.book-ai-badge')).toHaveCount(0);
       await expect(page.locator('.book-card-progress')).toHaveAttribute('role', 'progressbar');
       await expectNoHorizontalOverflow(page);
 
@@ -109,16 +98,16 @@ test.describe('visual polish structure', () => {
 
       await page.locator('#btn-library-create').click();
       await expect(page.locator('#creation-view')).toHaveClass(/active/);
-      await expect(page.locator('.creation-step')).toHaveCount(4);
-      await expect(page.locator('.workspace-pane')).toHaveCount(3);
+      await expect(page.locator('#creation-view h1')).toHaveText('笔记管理');
+      await expect(page.locator('.workspace-pane')).toHaveCount(2);
       const materialCard = page.locator('.material-card');
       await expect(materialCard).toHaveCount(1);
-      await expect(materialCard.locator('.material-check span')).toHaveText(material.book_title);
+      await expect(materialCard.locator('input')).toHaveCount(0);
+      await expect(materialCard.locator('.material-title')).toHaveText(material.book_title);
       const materialLayout = await materialCard.evaluate(element => {
         const rect = element.getBoundingClientRect();
-        const checkboxRect = element.querySelector('input').getBoundingClientRect();
         const content = [
-          element.querySelector('.material-check span'),
+          element.querySelector('.material-title'),
           element.querySelector('.material-quote'),
           element.querySelector('.material-note'),
           element.querySelector('.note-item-tags'),
@@ -137,13 +126,11 @@ test.describe('visual polish structure', () => {
           right: rect.right,
           clientWidth: element.clientWidth,
           scrollWidth: element.scrollWidth,
-          checkboxRight: checkboxRect.right,
           content,
         };
       });
       const [bookTitle, ...materialContent] = materialLayout.content;
       expect(bookTitle.right - bookTitle.left).toBeGreaterThan(26);
-      expect(bookTitle.left).toBeGreaterThan(materialLayout.checkboxRight);
       for (const item of materialContent) {
         expect(item.left).toBeGreaterThanOrEqual(bookTitle.left - 1);
       }
@@ -175,5 +162,86 @@ test.describe('visual polish structure', () => {
         expect(pane.radius).toBeGreaterThanOrEqual(8);
       }
     }
+  });
+
+  test('uses warm paper reader surfaces without unused sidebar columns', async ({ page }) => {
+    await mockShellApi(page);
+    await page.goto('/index.html');
+    await page.evaluate(() => {
+      document.querySelector('#library-view').classList.remove('active');
+      document.querySelector('#reader-view').classList.add('active');
+      document.body.classList.add('reader-active');
+    });
+    for (const width of [1440, 360]) {
+      await page.setViewportSize({ width, height: 900 });
+      const metrics = await page.evaluate(() => {
+        const reader = getComputedStyle(document.querySelector('#reader-view'));
+        const main = document.querySelector('.reader-main').getBoundingClientRect();
+        const viewport = document.querySelector('.reader-viewport').getBoundingClientRect();
+        return {
+          canvas: reader.getPropertyValue('--reader-canvas').trim(),
+          sidebar: reader.getPropertyValue('--reader-sidebar').trim(),
+          text: reader.getPropertyValue('--reader-text').trim(),
+          mainWidth: main.width,
+          viewportWidth: viewport.width,
+        };
+      });
+      expect(metrics).toMatchObject({ canvas: '#f4f1ea', sidebar: '#fffdf8', text: '#20231f' });
+      expect(Math.abs(metrics.mainWidth - metrics.viewportWidth)).toBeLessThanOrEqual(1);
+      await expectNoHorizontalOverflow(page);
+    }
+  });
+
+  test('keeps reader safe-area, danger, and selection-toolbar overrides correctly scoped', async ({ page }) => {
+    await mockShellApi(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/index.html');
+    await page.evaluate(() => {
+      document.querySelector('#library-view').classList.remove('active');
+      document.querySelector('#reader-view').classList.add('active');
+      document.body.classList.add('reader-active');
+      const danger = document.createElement('button');
+      danger.id = 'reader-danger-probe';
+      danger.className = 'btn btn-danger';
+      document.querySelector('#reader-view').appendChild(danger);
+      document.querySelector('#selection-toolbar').hidden = false;
+    });
+
+    const styles = await page.evaluate(() => {
+      const toolbar = document.querySelector('.reader-toolbar');
+      const danger = document.querySelector('#reader-danger-probe');
+      const selection = document.querySelector('#selection-toolbar');
+      const note = document.querySelector('#btn-add-note');
+      return {
+        toolbarHeight: toolbar.getBoundingClientRect().height,
+        toolbarRuleHeight: getComputedStyle(toolbar).height,
+        dangerBackground: getComputedStyle(danger).backgroundColor,
+        dangerColor: getComputedStyle(danger).color,
+        selectionBackground: getComputedStyle(selection).backgroundColor,
+        noteBackground: getComputedStyle(note).backgroundColor,
+      };
+    });
+    expect(styles.toolbarHeight).toBe(58);
+    expect(styles.toolbarRuleHeight).toBe('58px');
+    expect(styles.dangerBackground).toBe('rgb(179, 66, 53)');
+    expect(styles.dangerColor).toBe('rgb(255, 255, 255)');
+    expect(styles.selectionBackground).toBe('rgba(255, 253, 248, 0.97)');
+    expect(styles.noteBackground).toBe('rgb(244, 241, 234)');
+
+    await page.locator('#reader-danger-probe').hover();
+    await expect.poll(() => page.locator('#reader-danger-probe').evaluate(element => (
+      getComputedStyle(element).backgroundColor
+    ))).toBe('rgb(147, 54, 43)');
+
+    const safeAreaCss = await page.locator('link[rel="stylesheet"]').evaluate(async link => (
+      fetch(link.href).then(response => response.text())
+    ));
+    expect(safeAreaCss).toContain('height: calc(var(--toolbar-height) + env(safe-area-inset-top));');
+    expect(safeAreaCss).toContain('padding: calc(6px + env(safe-area-inset-top)) 8px 6px;');
+
+    await page.evaluate(() => document.body.classList.remove('reader-active'));
+    await expect.poll(() => page.locator('#selection-toolbar').evaluate(element => (
+      getComputedStyle(element).backgroundColor
+    ))).not.toBe('rgba(255, 253, 248, 0.97)');
   });
 });

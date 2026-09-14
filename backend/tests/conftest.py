@@ -7,6 +7,10 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import dotenv
+
+# Never load developer secrets while collecting or running tests.
+dotenv.load_dotenv = lambda *_args, **_kwargs: False
 
 # Ensure backend package is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))

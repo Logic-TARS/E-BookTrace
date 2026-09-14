@@ -18,9 +18,6 @@ test.describe('server library sync', () => {
       filename: 'server-book-1.epub',
       original_filename: 'multichapter.epub',
       content_hash: 'fixture-hash',
-      knowledge_book_id: 'knowledge-1',
-      knowledge_status: 'ready',
-      knowledge_error: '',
     };
     const state = {
       book_id: serverBook.id,
@@ -82,14 +79,6 @@ test.describe('server library sync', () => {
           await route.fulfill({ json: state });
           return;
         }
-        if (pathname === '/api/knowledge/books/knowledge-1' && method === 'GET') {
-          await route.fulfill({ json: { id: 'knowledge-1', status: 'ready' } });
-          return;
-        }
-        if (pathname.endsWith('/conversations') && method === 'GET') {
-          await route.fulfill({ json: { conversations: [], count: 0 } });
-          return;
-        }
         await route.fulfill({ status: 404, json: { detail: 'not mocked' } });
       });
     };
@@ -116,8 +105,33 @@ test.describe('server library sync', () => {
       return badge && badge.hidden;
     }, null, { timeout: 10_000 });
 
+    await pageA.locator('#btn-reveal-navigator').dispatchEvent('click');
+    await pageA.locator('.toc-item', { hasText: 'Chapter 2' }).click();
+    await expect.poll(() => state.progress?.progress_percent || 0).toBeGreaterThan(0);
+    const savedProgress = { ...state.progress };
+    await pageA.close();
+
     const contextB = await browser.newContext({ serviceWorkers: 'block' });
     const pageB = await contextB.newPage();
+    await pageB.addInitScript(() => {
+      let factory;
+      Object.defineProperty(window, 'ePub', {
+        get: () => factory,
+        set: original => {
+          factory = (...args) => {
+            const book = original(...args);
+            const generate = book.locations.generate.bind(book.locations);
+            book.locations.generate = async (...values) => {
+              await new Promise(resolve => { window.releaseLocations = resolve; });
+              const result = await generate(...values);
+              window.locationsGenerated = true;
+              return result;
+            };
+            return book;
+          };
+        },
+      });
+    });
     await installRoutes(pageB);
     await pageB.goto('/index.html');
     await expect(pageB.locator('.book-card')).toHaveCount(1);
@@ -125,8 +139,69 @@ test.describe('server library sync', () => {
     await pageB.click('.book-card');
     await expect(pageB.locator('#toolbar-book-title')).toContainText('Multichapter');
     await expect(pageB.locator('#bookmarks-count')).toHaveText('1');
+    await expect(pageB.locator('.toc-item.active')).toContainText('Chapter 2');
+    await expect(pageB.locator('#progress-text')).toHaveText(`${savedProgress.progress_percent}%`);
+    expect(state.progress.progress_percent).toBe(savedProgress.progress_percent);
+    await pageB.waitForFunction(() => typeof window.releaseLocations === 'function');
+    await pageB.evaluate(() => window.releaseLocations());
+    await pageB.waitForFunction(() => window.locationsGenerated);
+    await expect(pageB.locator('#progress-text')).toHaveText(`${savedProgress.progress_percent}%`);
+    await pageB.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await expect(pageB.locator('#sync-badge')).toBeHidden();
+    await expect(pageB.locator('#progress-text')).toHaveText(`${savedProgress.progress_percent}%`);
+    await pageB.locator('#btn-reveal-navigator').dispatchEvent('click');
+    await pageB.locator('.toc-item', { hasText: 'Chapter 1' }).click();
+    await expect(pageB.locator('.toc-item.active')).toContainText('Chapter 1');
+    await expect.poll(() => state.progress.progress_percent).toBe(0);
+    await expect(pageB.locator('#progress-text')).toHaveText('0%');
 
     await contextA.close();
     await contextB.close();
+  });
+
+  test('shows legacy local progress until real locations finish generating', async ({ page }) => {
+    await page.route('**/api/**', route => route.fulfill({ status: 503, json: { detail: 'offline' } }));
+    await page.goto('/index.html');
+    await page.evaluate(bytes => new Promise((resolve, reject) => {
+      const request = indexedDB.open('marginalia', 5);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction('books', 'readwrite');
+        tx.objectStore('books').put({
+          id: 'legacy-progress', book_title: 'Legacy local reading',
+          file_blob: Uint8Array.from(bytes).buffer,
+          last_cfi: 'epubcfi(/6/4!/4/2/1:0)', progress_percent: 47,
+          transfer_status: 'failed',
+        });
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => reject(tx.error);
+      };
+    }), Array.from(fs.readFileSync(FIXTURE)));
+    await page.addInitScript(() => {
+      let factory;
+      Object.defineProperty(window, 'ePub', {
+        get: () => factory,
+        set: original => {
+          factory = (...args) => {
+            const book = original(...args);
+            const generate = book.locations.generate.bind(book.locations);
+            book.locations.generate = async (...values) => {
+              await new Promise(resolve => { window.releaseLocations = resolve; });
+              return generate(...values);
+            };
+            return book;
+          };
+        },
+      });
+    });
+    await page.reload();
+    await page.click('.book-card');
+    await expect(page.locator('#toolbar-book-title')).toHaveText('Legacy local reading');
+    await expect(page.locator('.toc-item.active')).toContainText('Chapter 2');
+    await expect(page.locator('#progress-text')).toHaveText('47%');
+    await page.waitForFunction(() => typeof window.releaseLocations === 'function');
+    await page.evaluate(() => window.releaseLocations());
+    await expect(page.locator('#progress-text')).toHaveText('34%');
   });
 });

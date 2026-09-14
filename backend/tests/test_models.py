@@ -6,8 +6,7 @@ from models import (
     HighlightUpdate,
     SyncRequest,
     SyncResponse,
-    ScriptRequest,
-    ScriptResponse,
+    ObsidianExportRequest,
 )
 
 
@@ -86,31 +85,12 @@ class TestHighlightUpdate:
         assert update.color is None
 
 
-class TestScriptRequest:
-    def test_valid_request(self):
-        req = ScriptRequest(highlight_ids=["id1", "id2"])
-        assert req.highlight_ids == ["id1", "id2"]
+class TestObsidianExportRequest:
+    def test_book_export(self):
+        request = ObsidianExportRequest(kind="book", book_title="沉思录")
+        assert request.book_title == "沉思录"
 
-    def test_empty_ids(self):
-        req = ScriptRequest(highlight_ids=[])
-        assert req.highlight_ids == []
-
-    def test_optional_book_title(self):
-        req = ScriptRequest(book_title="沉思录", highlight_ids=["id1"])
-        assert req.book_title == "沉思录"
-
-
-class TestScriptResponse:
-    def test_all_fields(self):
-        resp = ScriptResponse(
-            book_title="沉思录",
-            script="完整脚本",
-            hook="引言",
-            body="正文",
-            cta="号召",
-            duration_estimate_seconds=60,
-            source_count=3,
-        )
-        assert resp.book_title == "沉思录"
-        assert resp.duration_estimate_seconds == 60
-        assert resp.source_count == 3
+    @pytest.mark.parametrize("kind", ["draft", "video", "article", ""])
+    def test_only_book_export_is_supported(self, kind):
+        with pytest.raises(ValueError):
+            ObsidianExportRequest(kind=kind)

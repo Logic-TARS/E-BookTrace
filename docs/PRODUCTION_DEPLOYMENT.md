@@ -7,7 +7,7 @@ Cloudflare Access 承担；Marginalia 本身仍是家庭共享账户，API 不�
 
 - 生产入口：`docker-compose.prod.yml`
 - 生产密钥：`.env.production`（已被 Git 忽略）
-- 持久数据：`backend/data` 绑定到容器 `/app/data`，自动朗读缓存位于 `/app/data/tts`
+- 持久数据：`backend/data` 绑定到容器 `/app/data`，现有数据库、书籍和历史文件原样保留
 - 公网链路：Cloudflare Tunnel `read.zengziyang.com` → `http://api:8720`
 - EPUB 文件上限：90 MB
 - 备份目录：`G:\Backups\Marginalia`，默认保留 14 份
@@ -84,7 +84,7 @@ Cloudflare Free/Pro 使用 full setup，需要 Cloudflare 接管整个 zone 的�
 
 ## 4. 启动生产容器
 
-确认 Docker Desktop 已启动、Windows Ollama 可访问，并已填写真实 Tunnel token：
+确认 Docker Desktop 已启动，并已填写真实 Tunnel token：
 
 ```powershell
 rtk proxy powershell -NoProfile -File .\scripts\Start-MarginaliaProduction.ps1
@@ -125,9 +125,10 @@ PowerShell 重试。备份脚本会在生产服务正在运行时短暂停止 AP
 - `docker compose -f docker-compose.prod.yml port api 8720`：无输出。
 - `Get-NetTCPConnection -State Listen -LocalPort 8720`：不得出现非 loopback 地址。
 - 家庭 Wi-Fi 与手机流量各测一次：白名单 OTP 成功，非白名单被拒，不需要 VPN。
-- 两台设备分别完成上传、阅读、划线、笔记、书签、进度同步和 AI 问答。
-- 打开一章测试自动朗读：首段生成后即播、后续段连续播放；刷新后恢复位置，同参数再次请求命中缓存。
-- 临时设置 `TTS_ENABLED=false` 重启，确认声音列表为空且页面不会卡死；恢复配置后执行 `docker compose -f docker-compose.prod.yml exec api python tts.py --cleanup` 验证清理命令。
+- 两台设备分别完成上传、阅读、全文搜索、划线、感悟标签、书签和进度同步；同时检查 `/book-chat/` 阅读界面。
+- 缓存测试书籍后离线打开，新增笔记并重新联网，确认变更可同步。
+- 在阅读器笔记弹窗验证感悟和标签编辑；在笔记管理页验证标签筛选、感悟编辑和删除。点击「导出书籍到 Obsidian」后，检查服务端配置目录下 `Marginalia/Books/` 中的书籍笔记 Markdown 文件；浏览器只显示导出路径，不下载 Markdown。调用 `/api/notes/export` 验证 `notes.json` 下载。Obsidian 仓库需要单独挂载到容器内可写路径，并与 `OBSIDIAN_VAULT_PATH` 对应。
+- 升级时保留原数据库、历史表和索引、现有音频与稿件文件，不执行数据清理或重建数据卷。
 - 上传一个接近但不超过 90 MB 的有效 EPUB，再确认超过 90 MB 返回 HTTP 413。
 - 临时停止 `cloudflared`，确认外部呈现不可用而不是绕过 Access 直达源站；恢复后重连。
 - 删除一个测试邮箱并撤销会话，确认原会话立即失效。

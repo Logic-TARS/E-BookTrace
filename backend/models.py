@@ -1,7 +1,7 @@
 """Pydantic models for the Marginalia API."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 import uuid
 
 from pydantic import BaseModel, Field
@@ -58,13 +58,6 @@ class BookSyncRequest(BaseModel):
     operations: list[ReaderSyncOperation] = Field(default_factory=list)
 
 
-class TTSCreateRequest(BaseModel):
-    """Whitelisted chapter narration options; chapter text stays server-side."""
-
-    voice: str = "zh-CN-XiaoxiaoNeural"
-    rate: float = 1.0
-
-
 class HighlightUpdate(BaseModel):
     """Editable highlight fields."""
     book_title: Optional[str] = None
@@ -90,88 +83,7 @@ class HighlightDelete(BaseModel):
     created_at: Optional[datetime] = None
 
 
-class DraftGenerateRequest(BaseModel):
-    """Request for generating a content draft from selected highlights."""
-    target: str
-    highlight_ids: list[str]
-    topic: str = ""
-    tone: str = ""
-    extra_instruction: str = ""
-
-
-class DraftUpdate(BaseModel):
-    """Editable draft fields."""
-    title: Optional[str] = None
-    content: Optional[str] = None
-    metadata: Optional[dict] = None
-
-
-class BookQAHighlight(BaseModel):
-    """Reader context item for book Q&A."""
-    highlight_text: str = ""
-    note: str = ""
-    tags: list[str] = Field(default_factory=list)
-    chapter: str = ""
-    progress_percent: float = 0.0
-    id: str = ""
-    cfi: str = ""
-
-
-class BookQARequest(BaseModel):
-    """Question about the current book and local reading notes."""
-    question: str
-    book_title: str = ""
-    book_author: str = ""
-    chapter: str = ""
-    progress_percent: float = 0.0
-    highlights: list[BookQAHighlight] = Field(default_factory=list)
-    knowledge_book_id: Optional[str] = None
-    conversation_id: Optional[str] = None
-
-
-class BookQAResponse(BaseModel):
-    """Answer returned by the book understanding assistant."""
-    answer: str
-    citations: list[dict] = Field(default_factory=list)
-    conversation_id: Optional[str] = None
-
-
-class ReaderLocation(BaseModel):
-    chapter: str = ""
-    href: str = ""
-    cfi: str = ""
-    progress_percent: float = 0.0
-
-
-class QAStreamRequest(BaseModel):
-    content: str
-    current_location: ReaderLocation = Field(default_factory=ReaderLocation)
-    local_highlights: list[BookQAHighlight] = Field(default_factory=list)
-
-
-class ConversationCreate(BaseModel):
-    title: str = ""
-
-
 class ObsidianExportRequest(BaseModel):
-    """Export a book's materials or one draft into an Obsidian vault."""
-    kind: str
+    """Export a book's notes into an Obsidian vault."""
+    kind: Literal["book"]
     book_title: Optional[str] = None
-    draft_id: Optional[str] = None
-
-
-class ScriptRequest(BaseModel):
-    """Request to generate a video script from highlights."""
-    book_title: str = ""
-    highlight_ids: list[str] = []
-
-
-class ScriptResponse(BaseModel):
-    """Generated video script output."""
-    book_title: str
-    script: str
-    hook: str
-    body: str
-    cta: str
-    duration_estimate_seconds: int
-    source_count: int

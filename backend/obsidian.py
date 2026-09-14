@@ -60,45 +60,6 @@ def export_book_materials(book_title: str, highlights: list[dict]) -> Path:
     return path
 
 
-def export_draft(draft: dict, highlights: list[dict]) -> Path:
-    """Write one generated draft to Obsidian Markdown."""
-    vault = _vault_path()
-    target_dir = vault / "Marginalia" / "Drafts"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    prefix = "视频号" if draft.get("target") == "video" else "公众号"
-    path = target_dir / f"{_safe_filename(prefix + '-' + draft.get('title', '未命名稿件'))}.md"
-
-    source_ids = draft.get("source_highlight_ids", [])
-    lines = [
-        "---",
-        "type: content-draft",
-        f"target: {draft.get('target', '')}",
-        f"title: {_yaml_scalar(draft.get('title', ''))}",
-        "source: marginalia",
-        "source_highlight_ids:",
-        *[f"  - {sid}" for sid in source_ids],
-        f"created: {draft.get('created_at', '')}",
-        f"updated: {draft.get('updated_at', '')}",
-        "---",
-        "",
-        f"# {draft.get('title', '未命名稿件')}",
-        "",
-        draft.get("content", ""),
-        "",
-        "## 来源素材",
-        "",
-    ]
-    for h in highlights:
-        lines.extend([
-            f"- 《{h.get('book_title', '')}》{h.get('chapter', '')}",
-            f"  > {h.get('highlight_text', '')}",
-        ])
-        if h.get("note"):
-            lines.append(f"  感悟：{h.get('note')}")
-    path.write_text("\n".join(lines), encoding="utf-8")
-    return path
-
-
 def _vault_path() -> Path:
     if not settings.obsidian_vault_path:
         raise ObsidianConfigError("OBSIDIAN_VAULT_PATH is required")

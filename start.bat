@@ -47,7 +47,7 @@ if not exist "%PROJECT_ROOT%.env" (
 )
 
 echo [INFO] Checking isolated dependencies...
-"%VENV_PYTHON%" -c "import fastapi, ebooklib, bs4, multipart, pytest" >nul 2>&1
+"%VENV_PYTHON%" -c "import fastapi, uvicorn, pydantic, aiosqlite, dotenv, ebooklib, bs4, httpx, multipart, pytest" >nul 2>&1
 if errorlevel 1 (
     echo [INFO] Installing dependencies into .venv...
     "%VENV_PYTHON%" -m pip install -r "%PROJECT_ROOT%backend\requirements.txt"

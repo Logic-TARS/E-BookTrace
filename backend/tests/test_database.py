@@ -2,9 +2,6 @@
 
 import asyncio
 import json
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -25,21 +22,13 @@ def mock_settings():
 
 
 @pytest.fixture
-def temp_db():
-    """Create a temporary SQLite database and override DB_PATH."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    db_path = tmp.name
-    tmp.close()
-
-    orig_path = database.DB_PATH
-    database.DB_PATH = Path(db_path)
-
+def temp_db(tmp_path, monkeypatch):
+    """Create isolated SQLite storage and notes export paths."""
+    db_path = tmp_path / "marginalia.db"
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+    monkeypatch.setattr(database, "NOTES_JSON_PATH", tmp_path / "notes.json")
     run(database.init_db())
-
-    yield db_path
-
-    os.unlink(db_path)
-    database.DB_PATH = orig_path
+    yield str(db_path)
 
 
 class TestDatabase:

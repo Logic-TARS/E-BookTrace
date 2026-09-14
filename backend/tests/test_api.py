@@ -1,85 +1,30 @@
 """Tests for FastAPI endpoints (backend/main.py)."""
 
-import asyncio
-import os
-import tempfile
+from functools import lru_cache
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-import aiosqlite
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-# --- Setup: override DB_PATH before importing main ---
 import database as db_module
 import config as config_module
-import knowledge as knowledge_module
 import books_api as books_api_module
 import library as library_module
-
-_test_db_dir = tempfile.mkdtemp()
-_test_db_path = Path(_test_db_dir) / "test_marginalia.db"
-db_module.DB_PATH = _test_db_path
-db_module.NOTES_JSON_PATH = Path(_test_db_dir) / "notes.json"
-knowledge_module.KNOWLEDGE_DIR = Path(_test_db_dir) / "knowledge"
-_test_books_dir = Path(_test_db_dir) / "books"
-books_api_module.BOOKS_DIR = _test_books_dir
-library_module.BOOKS_DIR = _test_books_dir
-# Defer main import until after DB_PATH patch
-import main as main_module
-import tts as tts_module
 from main import app
-
-_test_tts_dir = Path(_test_db_dir) / "tts"
-tts_module.tts_manager.storage_path = _test_tts_dir
 
 
 @pytest.fixture(autouse=True)
-def reset_db():
-    """Reset database before each test."""
-    try:
-        if _test_db_path.exists():
-            os.unlink(_test_db_path)
-    except (PermissionError, OSError):
-        pass
-    async def _init():
-        await db_module.init_db()
-        await knowledge_module.init_knowledge_db()
-        await library_module.init_library_db()
-        async with aiosqlite.connect(str(_test_db_path)) as db:
-            await db.execute("DELETE FROM highlights")
-            await db.execute("DELETE FROM drafts")
-            await db.execute("DELETE FROM reader_sync_operations")
-            await db.execute("DELETE FROM reader_bookmarks")
-            await db.execute("DELETE FROM reading_states")
-            await db.execute("DELETE FROM library_books")
-            await db.commit()
-        if _test_books_dir.exists():
-            for path in _test_books_dir.iterdir():
-                if path.is_file():
-                    path.unlink()
-        if db_module.NOTES_JSON_PATH.exists():
-            db_module.NOTES_JSON_PATH.unlink()
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    loop.run_until_complete(_init())
-    yield
-    try:
-        if _test_db_path.exists():
-            os.unlink(_test_db_path)
-        if db_module.NOTES_JSON_PATH.exists():
-            db_module.NOTES_JSON_PATH.unlink()
-    except (PermissionError, OSError):
-        pass
+def reset_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(db_module, "DB_PATH", tmp_path / "marginalia.db")
+    monkeypatch.setattr(db_module, "NOTES_JSON_PATH", tmp_path / "notes.json")
+    monkeypatch.setattr(books_api_module, "BOOKS_DIR", tmp_path / "books")
+    monkeypatch.setattr(library_module, "BOOKS_DIR", tmp_path / "books")
 
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 
 class TestHealth:
@@ -346,138 +291,83 @@ class TestHighlightCrud:
         assert client.delete("/api/highlights/missing").status_code == 404
 
 
-class TestBookQA:
-    def test_ask_book_success_with_mocked_llm(self, client):
-        async def fake_find_book(title, author):
-            return {"id": "book-1", "status": "ready"}
+class TestRemovedFeatures:
+    @pytest.mark.parametrize(("method", "path"), [
+        ("POST", "/api/books/ask"),
+        ("POST", "/api/knowledge/books/upload"),
+        ("POST", "/api/knowledge/books/from-server"),
+        ("GET", "/api/knowledge/books/book-1"),
+        ("POST", "/api/knowledge/books/book-1/reindex"),
+        ("DELETE", "/api/knowledge/books/book-1"),
+        ("GET", "/api/knowledge/books/book-1/conversations"),
+        ("POST", "/api/knowledge/books/book-1/conversations"),
+        ("DELETE", "/api/knowledge/conversations/conversation-1"),
+        ("GET", "/api/knowledge/conversations/conversation-1/messages"),
+        ("POST", "/api/knowledge/conversations/conversation-1/messages/stream"),
+        ("GET", "/api/tts/voices"),
+        ("POST", "/api/books/book-1/chapters/chapter.xhtml/tts"),
+        ("GET", "/api/tts/tasks/task-1"),
+        ("GET", "/api/tts/tasks/task-1/segments/0"),
+        ("POST", "/api/generate-script"),
+        ("POST", "/api/drafts/generate"),
+        ("GET", "/api/drafts"),
+        ("GET", "/api/drafts/draft-1"),
+        ("PATCH", "/api/drafts/draft-1"),
+        ("DELETE", "/api/drafts/draft-1"),
+    ])
+    def test_routes_are_unavailable(self, client, method, path):
+        response = client.request(method, path, json={})
+        assert response.status_code in {404, 405}
 
-        async def fake_answer(**kwargs):
-            assert kwargs["question"] == "这一章在讲什么？"
-            assert kwargs["book_id"] == "book-1"
-            assert kwargs["local_highlights"][0]["highlight_text"] == "宇宙是变化"
-            return {
-                "answer": "这章在说明变化和判断的关系。",
-                "citations": [],
-                "conversation_id": "conversation-1",
-            }
+    def test_removed_features_are_absent_from_openapi(self, client):
+        schema = client.get("/openapi.json").json()
+        assert not any(
+            token in path for path in schema["paths"]
+            for token in ("knowledge", "tts", "draft", "generate-script", "/ask")
+        )
+        assert not any(
+            token in name for name in schema["components"]["schemas"]
+            for token in ("QA", "Draft", "Script", "TTS", "Conversation")
+        )
 
-        with (
-            patch("knowledge.find_ready_book", fake_find_book),
-            patch("knowledge.answer_once", fake_answer),
-        ):
-            resp = client.post("/api/books/ask", json={
-                "question": "这一章在讲什么？",
-                "book_title": "沉思录",
-                "book_author": "马可",
-                "chapter": "卷四",
-                "progress_percent": 35,
-                "highlights": [
-                    {
-                        "highlight_text": "宇宙是变化",
-                        "note": "斯多葛核心",
-                        "tags": ["斯多葛"],
-                        "chapter": "卷四",
-                        "progress_percent": 35,
-                    }
-                ],
-            })
-
-        assert resp.status_code == 200
-        assert resp.json() == {
-            "answer": "这章在说明变化和判断的关系。",
-            "citations": [],
-            "conversation_id": "conversation-1",
-        }
-
-    def test_ask_book_empty_question_422(self, client):
-        resp = client.post("/api/books/ask", json={"question": "   "})
-        assert resp.status_code == 422
-
-    def test_ask_book_requires_index(self, client):
-        async def fake_find_book(title, author):
-            return None
-
-        with patch("knowledge.find_ready_book", fake_find_book):
-            resp = client.post("/api/books/ask", json={
-                "question": "这本书在讲什么？",
-                "book_title": "沉思录",
-            })
-
-        assert resp.status_code == 409
-
-
-class TestKnowledgeAPI:
-    def test_upload_epub_route(self, client):
-        async def fake_register(content, filename, title, author):
-            assert content == b"epub-bytes"
-            assert filename == "book.epub"
-            return {"id": "book-1", "status": "pending", "title": title}
-
-        with patch("knowledge.register_uploaded_book", fake_register):
-            resp = client.post(
-                "/api/knowledge/books/upload",
-                files={"file": ("book.epub", b"epub-bytes", "application/epub+zip")},
-                data={"title": "测试书"},
-            )
-        assert resp.status_code == 202
-        assert resp.json()["id"] == "book-1"
-
-    def test_epub_upload_limit_applies_to_both_upload_routes(self, client):
-        old_limit = config_module.settings.max_epub_upload_mb
-        config_module.settings.max_epub_upload_mb = 0
-        try:
-            knowledge_resp = client.post(
-                "/api/knowledge/books/upload",
-                files={"file": ("book.epub", b"x", "application/epub+zip")},
-            )
-            library_resp = client.post(
-                "/api/books/upload",
-                files={"file": ("book.epub", b"x", "application/epub+zip")},
-            )
-        finally:
-            config_module.settings.max_epub_upload_mb = old_limit
-
-        assert knowledge_resp.status_code == 413
-        assert library_resp.status_code == 413
+    def test_draft_export_is_rejected(self, client):
+        response = client.post("/api/obsidian/export", json={
+            "kind": "draft", "draft_id": "old-draft",
+        })
+        assert response.status_code == 422
 
 
 class TestServerLibraryAPI:
     @staticmethod
+    @lru_cache(maxsize=1)
     def _epub_bytes():
-        fixture = (
-            Path(__file__).parents[2]
-            / "frontend"
-            / "tests"
-            / "fixtures"
-            / "multichapter.epub"
-        )
-        return fixture.read_bytes()
+        import io
+        from ebooklib import epub
+
+        book = epub.EpubBook()
+        book.set_identifier("reader-test")
+        book.set_title("阅读测试")
+        book.set_language("zh")
+        book.add_author("测试作者")
+        chapter = epub.EpubHtml(title="第一章", file_name="chapter.xhtml", lang="zh")
+        chapter.content = "<h1>第一章</h1><p>阅读带来新的理解。</p>"
+        book.add_item(chapter)
+        book.toc = [chapter]
+        book.spine = ["nav", chapter]
+        book.add_item(epub.EpubNav())
+        output = io.BytesIO()
+        epub.write_epub(output, book)
+        return output.getvalue()
 
     def test_upload_is_server_visible_and_deduplicated(self, client):
-        async def no_index(_book_id):
-            return None
-
-        with patch("library.ensure_library_knowledge", no_index):
-            first = client.post(
-                "/api/books/upload",
-                files={
-                    "file": (
-                        "remote.epub",
-                        self._epub_bytes(),
-                        "application/epub+zip",
-                    )
-                },
-            )
-            second = client.post(
-                "/api/books/upload",
-                files={
-                    "file": (
-                        "copy.epub",
-                        self._epub_bytes(),
-                        "application/epub+zip",
-                    )
-                },
-            )
+        first = client.post(
+            "/api/books/upload",
+            files={"file": ("remote.epub", self._epub_bytes(), "application/epub+zip")},
+        )
+        second = client.post(
+            "/api/books/upload",
+            files={"file": ("copy.epub", self._epub_bytes(), "application/epub+zip")},
+        )
 
         assert first.status_code == 202
         assert first.json()["created"] is True
@@ -492,20 +382,10 @@ class TestServerLibraryAPI:
         assert served.content == self._epub_bytes()
 
     def test_upload_accepts_uppercase_extension(self, client):
-        async def no_index(_book_id):
-            return None
-
-        with patch("library.ensure_library_knowledge", no_index):
-            resp = client.post(
-                "/api/books/upload",
-                files={
-                    "file": (
-                        "BOOK.EPUB",
-                        self._epub_bytes(),
-                        "application/epub+zip",
-                    )
-                },
-            )
+        resp = client.post(
+            "/api/books/upload",
+            files={"file": ("BOOK.EPUB", self._epub_bytes(), "application/epub+zip")},
+        )
         assert resp.status_code == 202
 
     def test_upload_rejects_wrong_extension(self, client):
@@ -513,12 +393,7 @@ class TestServerLibraryAPI:
             "/api/books/upload",
             files={"file": ("book.zip", self._epub_bytes(), "application/epub+zip")},
         )
-        knowledge_resp = client.post(
-            "/api/knowledge/books/upload",
-            files={"file": ("book.zip", self._epub_bytes(), "application/epub+zip")},
-        )
         assert library_resp.status_code == 415
-        assert knowledge_resp.status_code == 415
 
     def test_upload_rejects_non_zip(self, client):
         resp = client.post(
@@ -540,6 +415,43 @@ class TestServerLibraryAPI:
         )
         assert resp.status_code == 415
 
+    @pytest.mark.parametrize("size", [0, 1024 * 1024 + 1], ids=["empty", "oversized"])
+    def test_upload_size_limit(self, client, monkeypatch, size):
+        content = b"x" * size
+        monkeypatch.setattr(config_module.settings, "max_epub_upload_mb", 1)
+        response = client.post("/api/books/upload", files={
+            "file": ("book.epub", content, "application/epub+zip"),
+        })
+        assert response.status_code == 413
+        assert list(books_api_module.BOOKS_DIR.iterdir()) == []
+
+    @pytest.mark.parametrize(("limit", "code"), [
+        ("MAX_ZIP_ENTRIES", "epub_too_many_entries"),
+        ("MAX_UNCOMPRESSED_BYTES", "epub_too_large"),
+    ])
+    def test_archive_safety_limits(self, client, monkeypatch, limit, code):
+        monkeypatch.setattr(books_api_module, limit, 1)
+        response = client.post("/api/books/upload", files={
+            "file": ("book.epub", self._epub_bytes(), "application/epub+zip"),
+        })
+        assert response.status_code == 413
+        assert response.json()["detail"]["code"] == code
+        assert list(books_api_module.BOOKS_DIR.iterdir()) == []
+
+    def test_malformed_epub_metadata_is_rejected(self, client):
+        import io
+        from zipfile import ZipFile
+
+        output = io.BytesIO()
+        with ZipFile(output, "w") as archive:
+            archive.writestr("META-INF/container.xml", "<broken>")
+        response = client.post("/api/books/upload", files={
+            "file": ("book.epub", output.getvalue(), "application/epub+zip"),
+        })
+        assert response.status_code == 415
+        assert response.json()["detail"]["code"] == "invalid_epub"
+        assert list(books_api_module.BOOKS_DIR.iterdir()) == []
+
     def test_failed_upload_leaves_no_files_behind(self, client):
         import books_api as books_api_module
 
@@ -552,20 +464,10 @@ class TestServerLibraryAPI:
         assert before == after
 
     def test_cross_device_state_sync_is_idempotent(self, client):
-        async def no_index(_book_id):
-            return None
-
-        with patch("library.ensure_library_knowledge", no_index):
-            uploaded = client.post(
-                "/api/books/upload",
-                files={
-                    "file": (
-                        "sync.epub",
-                        self._epub_bytes(),
-                        "application/epub+zip",
-                    )
-                },
-            ).json()["book"]
+        uploaded = client.post(
+            "/api/books/upload",
+            files={"file": ("sync.epub", self._epub_bytes(), "application/epub+zip")},
+        ).json()["book"]
 
         operations = [
             {
@@ -619,20 +521,10 @@ class TestServerLibraryAPI:
         assert state["highlights"][0]["note"] == "server note"
 
     def test_delete_removes_file_and_reader_state(self, client):
-        async def no_index(_book_id):
-            return None
-
-        with patch("library.ensure_library_knowledge", no_index):
-            book = client.post(
-                "/api/books/upload",
-                files={
-                    "file": (
-                        "delete.epub",
-                        self._epub_bytes(),
-                        "application/epub+zip",
-                    )
-                },
-            ).json()["book"]
+        book = client.post(
+            "/api/books/upload",
+            files={"file": ("delete.epub", self._epub_bytes(), "application/epub+zip")},
+        ).json()["book"]
 
         client.post(
             f"/api/books/{book['id']}/sync",
@@ -652,199 +544,8 @@ class TestServerLibraryAPI:
         assert client.get(f"/api/books/{book['id']}/sync").status_code == 404
         assert client.get("/api/books").json()["books"] == []
 
-    def test_conversation_crud(self, client):
-        async def prepare():
-            now = knowledge_module._now()
-            db = await knowledge_module._connect()
-            try:
-                await db.execute(
-                    """
-                    INSERT INTO qa_books
-                        (id,content_hash,title,original_filename,source_path,
-                         source_kind,status,created_at,updated_at)
-                    VALUES ('book-api','hash-api','Book','book.epub','book.epub',
-                            'server','ready',?,?)
-                    """,
-                    (now, now),
-                )
-                await db.commit()
-            finally:
-                await db.close()
 
-        asyncio.get_event_loop().run_until_complete(prepare())
-        created = client.post(
-            "/api/knowledge/books/book-api/conversations", json={"title": ""}
-        )
-        assert created.status_code == 201
-        conversation_id = created.json()["id"]
-        listed = client.get("/api/knowledge/books/book-api/conversations")
-        assert listed.json()["conversations"][0]["id"] == conversation_id
-        assert client.delete(
-            f"/api/knowledge/conversations/{conversation_id}"
-        ).status_code == 200
-
-    def test_stream_route_uses_sse(self, client):
-        async def fake_conversation(_conversation_id):
-            return {"id": "conversation-api", "book_id": "book-api"}
-
-        async def fake_stream(*_args, **_kwargs):
-            yield 'event: delta\ndata: {"text":"回答"}\n\n'
-            yield 'event: done\ndata: {"assistant_message":{}}\n\n'
-
-        with (
-            patch("knowledge.get_conversation", fake_conversation),
-            patch("knowledge.stream_answer", fake_stream),
-        ):
-            resp = client.post(
-                "/api/knowledge/conversations/conversation-api/messages/stream",
-                json={"content": "问题"},
-            )
-        assert resp.status_code == 200
-        assert resp.headers["content-type"].startswith("text/event-stream")
-        assert "event: delta" in resp.text
-
-
-class TestTTSAPI:
-    def test_voice_list_contains_confirmed_chinese_voices(self, client):
-        response = client.get("/api/tts/voices")
-        assert response.status_code == 200
-        voices = response.json()["voices"]
-        assert {voice["id"] for voice in voices} == {
-            "zh-CN-XiaoxiaoNeural",
-            "zh-CN-YunxiNeural",
-        }
-        assert {voice["gender"] for voice in voices} == {"Female", "Male"}
-
-    def test_create_task_uses_book_and_chapter_ids_only(self, client):
-        async def accessible(_request, book_id):
-            return {"id": book_id, "filename": "safe.epub"}
-
-        async def fake_create(**kwargs):
-            assert kwargs["book"]["id"] == "book-1"
-            assert kwargs["chapter_id"] == "Text/chapter 1.xhtml"
-            assert kwargs["voice"] == "zh-CN-XiaoxiaoNeural"
-            assert kwargs["rate"] == 1.25
-            return {
-                "taskId": "task-1", "bookId": "book-1",
-                "chapterId": kwargs["chapter_id"], "status": "pending",
-                "segmentCount": 2, "completedSegments": 0, "segments": [],
-                "voice": kwargs["voice"], "rate": kwargs["rate"], "error": None,
-            }
-
-        with (
-            patch("main._tts_accessible_book", accessible),
-            patch.object(tts_module.tts_manager, "create_or_get", fake_create),
-        ):
-            response = client.post(
-                "/api/books/book-1/chapters/Text%2Fchapter%201.xhtml/tts",
-                json={"voice": "zh-CN-XiaoxiaoNeural", "rate": 1.25},
-            )
-        assert response.status_code == 202
-        assert response.json()["taskId"] == "task-1"
-
-    def test_duplicate_and_generating_requests_return_same_task(self, client):
-        task = {
-            "taskId": "same-task", "bookId": "book-1", "chapterId": "chapter.xhtml",
-            "status": "generating", "segmentCount": 3, "completedSegments": 1,
-            "segments": [{"index": 0, "audioUrl": "/audio"}],
-            "voice": "zh-CN-XiaoxiaoNeural", "rate": 1.0, "error": None,
-        }
-
-        async def accessible(_request, _book_id):
-            return {"id": "book-1", "filename": "book.epub"}
-
-        async def same_task(**_kwargs):
-            return task
-
-        with (
-            patch("main._tts_accessible_book", accessible),
-            patch.object(tts_module.tts_manager, "create_or_get", same_task),
-        ):
-            first = client.post(
-                "/api/books/book-1/chapters/chapter.xhtml/tts",
-                json={"voice": "zh-CN-XiaoxiaoNeural", "rate": 1.0},
-            )
-            second = client.post(
-                "/api/books/book-1/chapters/chapter.xhtml/tts",
-                json={"voice": "zh-CN-XiaoxiaoNeural", "rate": 1.0},
-            )
-        assert first.json()["taskId"] == second.json()["taskId"] == "same-task"
-
-    @pytest.mark.parametrize(
-        ("payload", "code"),
-        [
-            ({"voice": "arbitrary", "rate": 1.0}, "invalid_voice"),
-            ({"voice": "zh-CN-XiaoxiaoNeural", "rate": 1.1}, "invalid_rate"),
-        ],
-    )
-    def test_illegal_tts_parameters_are_rejected(self, client, payload, code):
-        async def accessible(_request, _book_id):
-            return {"id": "book-1", "filename": "book.epub"}
-
-        async def reject(**kwargs):
-            tts_module.TTSManager._validate_parameters(kwargs["voice"], kwargs["rate"])
-
-        with (
-            patch("main._tts_accessible_book", accessible),
-            patch.object(tts_module.tts_manager, "create_or_get", reject),
-        ):
-            response = client.post(
-                "/api/books/book-1/chapters/chapter.xhtml/tts", json=payload
-            )
-        assert response.status_code == 422
-        assert response.json()["detail"]["code"] == code
-
-    def test_missing_chapter_and_book_access_denial(self, client):
-        async def accessible(_request, _book_id):
-            return {"id": "book-1", "filename": "book.epub"}
-
-        async def missing(**_kwargs):
-            raise tts_module.TTSError("章节不存在", 404, "chapter_not_found")
-
-        with (
-            patch("main._tts_accessible_book", accessible),
-            patch.object(tts_module.tts_manager, "create_or_get", missing),
-        ):
-            missing_response = client.post(
-                "/api/books/book-1/chapters/missing.xhtml/tts",
-                json={"voice": "zh-CN-XiaoxiaoNeural", "rate": 1.0},
-            )
-        assert missing_response.status_code == 404
-
-        async def denied(_request, _book_id):
-            raise HTTPException(status_code=403, detail="无权访问该书籍")
-
-        with patch("main._tts_accessible_book", denied):
-            denied_response = client.post(
-                "/api/books/book-1/chapters/chapter.xhtml/tts",
-                json={"voice": "zh-CN-XiaoxiaoNeural", "rate": 1.0},
-            )
-        assert denied_response.status_code == 403
-
-    def test_failed_task_status_is_returned(self, client):
-        async def failed(_task_id):
-            return {
-                "taskId": "failed-task", "bookId": "book-1", "chapterId": "chapter.xhtml",
-                "status": "failed", "segmentCount": 2, "completedSegments": 1,
-                "segments": [{"index": 0, "audioUrl": "/audio"}],
-                "voice": "zh-CN-YunxiNeural", "rate": 1.0,
-                "error": "第 2 段生成超时",
-            }
-
-        async def accessible(_request, _book_id):
-            return {"id": "book-1"}
-
-        with (
-            patch.object(tts_module.tts_manager, "get_task", failed),
-            patch("main._tts_accessible_book", accessible),
-        ):
-            response = client.get("/api/tts/tasks/failed-task")
-        assert response.status_code == 200
-        assert response.json()["status"] == "failed"
-        assert "超时" in response.json()["error"]
-
-
-class TestCreationWorkspace:
+class TestNotesWorkspace:
     def test_materials_filter_by_book_tag_and_status(self, client):
         client.post("/api/highlights", json={
             "highlights": [
@@ -874,90 +575,6 @@ class TestCreationWorkspace:
         assert data["count"] == 1
         assert data["materials"][0]["client_id"] == "m-1"
 
-    def test_generate_draft_requires_llm_config(self, client):
-        client.post("/api/highlights", json={
-            "highlights": [
-                {"id": "g-1", "book_title": "沉思录", "highlight_text": "宇宙是变化"}
-            ]
-        })
-        old_values = (
-            config_module.settings.llm_base_url,
-            config_module.settings.llm_api_key,
-            config_module.settings.llm_model,
-        )
-        config_module.settings.llm_base_url = ""
-        config_module.settings.llm_api_key = ""
-        config_module.settings.llm_model = ""
-        try:
-            resp = client.post("/api/drafts/generate", json={
-                "target": "video",
-                "highlight_ids": ["g-1"],
-            })
-        finally:
-            (
-                config_module.settings.llm_base_url,
-                config_module.settings.llm_api_key,
-                config_module.settings.llm_model,
-            ) = old_values
-        assert resp.status_code == 422
-
-    def test_generate_draft_success_with_mocked_llm(self, client):
-        client.post("/api/highlights", json={
-            "highlights": [
-                {
-                    "id": "g-2",
-                    "book_title": "沉思录",
-                    "highlight_text": "宇宙是变化",
-                    "note": "人生也是解释",
-                }
-            ]
-        })
-
-        async def fake_generate(**kwargs):
-            return {
-                "title": "变化中的人生",
-                "content": "这是一段视频号口播稿",
-                "metadata": {"estimated_seconds": 60},
-            }
-
-        with patch("llm.generate_draft_with_llm", fake_generate):
-            resp = client.post("/api/drafts/generate", json={
-                "target": "video",
-                "highlight_ids": ["g-2"],
-                "topic": "变化",
-            })
-
-        assert resp.status_code == 200
-        draft = resp.json()
-        assert draft["title"] == "变化中的人生"
-        assert draft["target"] == "video"
-        assert draft["source_highlight_ids"] == ["g-2"]
-
-        list_resp = client.get("/api/drafts")
-        assert list_resp.json()["count"] == 1
-
-    def test_draft_crud(self, client):
-        import database
-
-        draft = asyncio.get_event_loop().run_until_complete(database.create_draft(
-            target="article",
-            title="初稿",
-            content="正文",
-            source_highlight_ids=[],
-            metadata={},
-        ))
-
-        resp = client.patch(f"/api/drafts/{draft['id']}", json={
-            "title": "改后标题",
-            "content": "改后正文",
-        })
-        assert resp.status_code == 200
-        assert resp.json()["title"] == "改后标题"
-
-        assert client.get(f"/api/drafts/{draft['id']}").status_code == 200
-        assert client.delete(f"/api/drafts/{draft['id']}").status_code == 200
-        assert client.get(f"/api/drafts/{draft['id']}").status_code == 404
-
     def test_obsidian_export_book(self, client, tmp_path):
         import config
 
@@ -986,50 +603,6 @@ class TestCreationWorkspace:
         path = Path(resp.json()["path"])
         assert path.exists()
         assert "宇宙是变化" in path.read_text(encoding="utf-8")
-
-
-class TestGenerateScript:
-    def _sync_and_get_ids(self, client, highlights):
-        resp = client.post("/api/highlights", json={"highlights": highlights})
-        return resp.json()["ids"]
-
-    def test_generate_script_success(self, client):
-        ids = self._sync_and_get_ids(client, [
-            {
-                "book_title": "沉思录",
-                "highlight_text": "宇宙是变化，人生是看法。",
-                "note": "斯多葛核心",
-                "tags": ["哲学"],
-                "progress_percent": 35,
-            },
-            {
-                "book_title": "沉思录",
-                "highlight_text": "一日之始就对自己说。",
-                "note": "",
-                "progress_percent": 15,
-            },
-        ])
-
-        resp = client.post("/api/generate-script", json={"highlight_ids": ids})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["book_title"] == "沉思录"
-        assert data["source_count"] <= len(ids)
-        assert len(data["hook"]) > 0
-        assert len(data["body"]) > 0
-        assert len(data["cta"]) > 0
-        assert isinstance(data["duration_estimate_seconds"], int)
-
-    def test_generate_script_no_ids_422(self, client):
-        resp = client.post("/api/generate-script", json={"highlight_ids": []})
-        assert resp.status_code == 422
-
-    def test_generate_script_not_found(self, client):
-        resp = client.post(
-            "/api/generate-script",
-            json={"highlight_ids": ["nonexistent-uuid"]},
-        )
-        assert resp.status_code == 404
 
 
 class TestNotesExport:
@@ -1064,12 +637,106 @@ class TestNotesExport:
         assert "created_at" in entry
 
 
-# --- Cleanup ---
-def teardown_module():
-    """Remove temp directory after all tests."""
-    import shutil
-    try:
-        if _test_db_dir and Path(_test_db_dir).exists():
-            shutil.rmtree(_test_db_dir, ignore_errors=True)
-    except Exception:
-        pass  # directory may already be cleaned up
+class TestLibraryIsolation:
+    def test_fresh_library_has_no_removed_feature_tables(self, client):
+        import sqlite3
+
+        with sqlite3.connect(db_module.DB_PATH) as db:
+            names = {row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+        assert {"highlights", "library_books", "reader_bookmarks", "reading_states"} <= names
+        assert "drafts" not in names
+        assert not any(name.startswith(("qa_", "tts_")) for name in names)
+        assert client.get("/api/books").json() == {"books": []}
+
+    def test_legacy_epub_registration_needs_no_knowledge_tables(self):
+        books_api_module.BOOKS_DIR.mkdir(parents=True)
+        source = books_api_module.BOOKS_DIR / "legacy.epub"
+        source.write_bytes(TestServerLibraryAPI._epub_bytes())
+        with TestClient(app) as client:
+            books = client.get("/api/books").json()["books"]
+            assert len(books) == 1
+            assert books[0]["title"] == "阅读测试"
+            assert books[0]["author"] == "测试作者"
+            assert not any(key.startswith("knowledge") for key in books[0])
+            assert client.get(f"/api/books/{books[0]['id']}/file").content == source.read_bytes()
+        with TestClient(app) as client:
+            assert len(client.get("/api/books").json()["books"]) == 1
+
+    def test_upload_sync_materials_search_and_exports(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config_module.settings, "obsidian_vault_path", str(tmp_path))
+        content = TestServerLibraryAPI._epub_bytes()
+        response = client.post("/api/books/upload", files={
+            "file": ("notes.epub", content, "application/epub+zip"),
+        }, data={"title": "阅读测试", "author": "测试作者"})
+        assert response.status_code == 202
+        book = response.json()["book"]
+        assert not any(key.startswith("knowledge") for key in book)
+        response = client.post(f"/api/books/{book['id']}/sync", json={
+            "operations": [
+                {"op_id": "p", "type": "progress.set", "payload": {
+                    "cfi": "epubcfi(/6/2)", "progress_percent": 25,
+                }},
+                {"op_id": "b", "type": "bookmark.upsert", "entity_id": "bookmark", "payload": {
+                    "cfi": "epubcfi(/6/2)", "label": "重读", "progress_percent": 25,
+                }},
+                {"op_id": "h", "type": "highlight.upsert", "entity_id": "highlight", "payload": {
+                    "highlight_text": "阅读带来新的理解", "note": "独立思考", "tags": ["阅读"],
+                }},
+            ],
+        })
+        assert response.status_code == 200
+        state = client.get(f"/api/books/{book['id']}/sync").json()
+        assert state["progress"]["progress_percent"] == 25
+        assert state["bookmarks"][0]["label"] == "重读"
+        materials = client.get("/api/materials", params={"tag": "阅读", "has_note": True}).json()
+        assert materials["count"] == 1
+        assert materials["materials"][0]["note"] == "独立思考"
+        assert client.get("/api/search", params={"q": "独立思考"}).json()["count"] == 1
+        exported = client.get("/api/notes/export")
+        assert exported.status_code == 200
+        assert exported.json()[0]["tags"] == ["阅读"]
+        markdown = client.post("/api/obsidian/export", json={"kind": "book", "book_title": book["title"]})
+        assert markdown.status_code == 200
+        text = Path(markdown.json()["path"]).read_text(encoding="utf-8")
+        assert "阅读带来新的理解" in text
+        assert "独立思考" in text
+        assert "#阅读" in text
+
+    def test_startup_preserves_legacy_tables_indexes_and_files(self, tmp_path):
+        import sqlite3
+
+        with sqlite3.connect(db_module.DB_PATH) as db:
+            for table in ("qa_books", "qa_chunks", "qa_conversations", "qa_messages", "drafts", "tts_tasks"):
+                db.execute(f"CREATE TABLE {table} (id TEXT PRIMARY KEY, content TEXT)")
+                db.execute(f"INSERT INTO {table} VALUES ('legacy', 'keep me')")
+                db.execute(f"CREATE INDEX idx_legacy_{table} ON {table}(content)")
+            db.execute("CREATE VIRTUAL TABLE qa_chunks_fts USING fts5(text)")
+            db.execute("INSERT INTO qa_chunks_fts VALUES ('historic index')")
+        files = [tmp_path / "knowledge" / "source.epub", tmp_path / "tts" / "audio.mp3", tmp_path / "drafts" / "draft.md"]
+        for path in files:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"historical data")
+        with TestClient(app) as client:
+            assert client.get("/api/books").json() == {"books": []}
+            assert client.get("/health").status_code == 200
+            book = client.post("/api/books/upload", files={
+                "file": ("legacy.epub", TestServerLibraryAPI._epub_bytes(), "application/epub+zip"),
+            }).json()["book"]
+            with sqlite3.connect(db_module.DB_PATH) as db:
+                db.execute("UPDATE library_books SET knowledge_book_id='legacy' WHERE id=?", (book["id"],))
+            operations = {"operations": [{
+                "op_id": "legacy-highlight", "type": "highlight.upsert", "entity_id": "legacy-note",
+                "payload": {"highlight_text": "legacy highlight", "note": "kept"},
+            }]}
+            assert client.post(f"/api/books/{book['id']}/sync", json=operations).status_code == 200
+            with sqlite3.connect(db_module.DB_PATH) as db:
+                assert db.execute("SELECT knowledge_book_id FROM highlights").fetchone() == ("legacy",)
+            assert client.delete(f"/api/books/{book['id']}").status_code == 200
+        with sqlite3.connect(db_module.DB_PATH) as db:
+            for table in ("qa_books", "qa_chunks", "qa_conversations", "qa_messages", "drafts", "tts_tasks"):
+                assert db.execute(f"SELECT * FROM {table}").fetchall() == [("legacy", "keep me")]
+                assert db.execute("SELECT name FROM sqlite_master WHERE name=?", (f"idx_legacy_{table}",)).fetchone()
+            assert db.execute("SELECT text FROM qa_chunks_fts").fetchall() == [("historic index",)]
+        assert all(path.read_bytes() == b"historical data" for path in files)

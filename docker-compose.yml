@@ -11,12 +11,6 @@ services:
       - marginalia_data:/app/data
     env_file:
       - .env
-    environment:
-      # Reuse the Windows-native Ollama service from inside the container.
-      EMBEDDING_BASE_URL: http://host.docker.internal:11434/v1
-      TTS_STORAGE_PATH: /app/data/tts
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     command: uvicorn main:app --host 0.0.0.0 --port 8720 --reload
 
 volumes:

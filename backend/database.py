@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Optional
-import uuid
 
 import aiosqlite
 
@@ -56,19 +55,6 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_highlights_book_id ON highlights(book_id)"
         )
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS drafts (
-                id TEXT PRIMARY KEY,
-                target TEXT NOT NULL,
-                title TEXT NOT NULL,
-                content TEXT NOT NULL,
-                metadata TEXT DEFAULT '{}',
-                source_highlight_ids TEXT DEFAULT '[]',
-                created_at TEXT,
-                updated_at TEXT,
-                exported_to_obsidian INTEGER DEFAULT 0
-            )
-        """)
         await db.commit()
         await _init_highlights_fts(db)
 
@@ -286,7 +272,7 @@ async def get_materials(
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict]:
-    """Fetch highlight materials for the creation workspace."""
+    """Fetch highlights and reflections for the notes workspace."""
     async with aiosqlite.connect(str(DB_PATH)) as db:
         db.row_factory = aiosqlite.Row
         conditions = []
@@ -493,126 +479,6 @@ def _highlight_status(highlight: dict) -> str:
     if explicit and (explicit != "raw" or not str(highlight.get("note", "")).strip()):
         return explicit
     return "reflected" if str(highlight.get("note", "")).strip() else "raw"
-
-
-def _row_json_list(value: Any) -> list:
-    try:
-        if isinstance(value, str):
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, list) else []
-        return value if isinstance(value, list) else []
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-def _row_json_dict(value: Any) -> dict:
-    try:
-        if isinstance(value, str):
-            parsed = json.loads(value)
-            return parsed if isinstance(parsed, dict) else {}
-        return value if isinstance(value, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-def _draft_row_to_dict(row: aiosqlite.Row) -> dict:
-    d = dict(row)
-    d["metadata"] = _row_json_dict(d.get("metadata"))
-    d["source_highlight_ids"] = _row_json_list(d.get("source_highlight_ids"))
-    d["exported_to_obsidian"] = bool(d.get("exported_to_obsidian"))
-    return d
-
-
-async def create_draft(
-    target: str,
-    title: str,
-    content: str,
-    source_highlight_ids: list[str],
-    metadata: Optional[dict] = None,
-) -> dict:
-    """Create a generated content draft."""
-    from datetime import datetime, timezone
-
-    now = datetime.now(timezone.utc).isoformat()
-    draft_id = str(uuid.uuid4())
-    async with aiosqlite.connect(str(DB_PATH)) as db:
-        await db.execute(
-            """
-            INSERT INTO drafts
-                (id, target, title, content, metadata, source_highlight_ids,
-                 created_at, updated_at, exported_to_obsidian)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-            """,
-            (
-                draft_id,
-                target,
-                title,
-                content,
-                json.dumps(metadata or {}, ensure_ascii=False),
-                json.dumps(source_highlight_ids, ensure_ascii=False),
-                now,
-                now,
-            ),
-        )
-        await db.commit()
-    draft = await get_draft(draft_id)
-    return draft or {}
-
-
-async def list_drafts(target: Optional[str] = None, limit: int = 100, offset: int = 0) -> list[dict]:
-    """List content drafts."""
-    async with aiosqlite.connect(str(DB_PATH)) as db:
-        db.row_factory = aiosqlite.Row
-        if target:
-            rows = await db.execute_fetchall(
-                "SELECT * FROM drafts WHERE target = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
-                (target, limit, offset),
-            )
-        else:
-            rows = await db.execute_fetchall(
-                "SELECT * FROM drafts ORDER BY updated_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
-            )
-        return [_draft_row_to_dict(r) for r in rows]
-
-
-async def get_draft(draft_id: str) -> dict | None:
-    """Fetch one draft."""
-    async with aiosqlite.connect(str(DB_PATH)) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,))
-        row = await cursor.fetchone()
-        return _draft_row_to_dict(row) if row else None
-
-
-async def update_draft(draft_id: str, data: dict) -> dict | None:
-    """Update a draft and return it."""
-    from datetime import datetime, timezone
-
-    allowed = {"title", "content", "metadata", "exported_to_obsidian"}
-    values = {k: v for k, v in data.items() if k in allowed and v is not None}
-    if not values:
-        return await get_draft(draft_id)
-    if "metadata" in values:
-        values["metadata"] = json.dumps(values["metadata"], ensure_ascii=False)
-    if "exported_to_obsidian" in values:
-        values["exported_to_obsidian"] = 1 if values["exported_to_obsidian"] else 0
-    values["updated_at"] = datetime.now(timezone.utc).isoformat()
-    assignments = ", ".join(f"{key} = ?" for key in values)
-    params = [*values.values(), draft_id]
-
-    async with aiosqlite.connect(str(DB_PATH)) as db:
-        await db.execute(f"UPDATE drafts SET {assignments} WHERE id = ?", params)
-        await db.commit()
-    return await get_draft(draft_id)
-
-
-async def delete_draft(draft_id: str) -> bool:
-    """Delete a draft."""
-    async with aiosqlite.connect(str(DB_PATH)) as db:
-        cursor = await db.execute("DELETE FROM drafts WHERE id = ?", (draft_id,))
-        await db.commit()
-        return cursor.rowcount > 0
 
 
 NOTES_JSON_PATH = Path(__file__).parent / "data" / "notes.json"

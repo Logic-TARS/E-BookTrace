@@ -391,13 +391,14 @@ test.describe('@mobile mobile layout', () => {
     await expect(page).toHaveURL(/#\/creation$/);
     await expectNoHorizontalOverflow(page);
 
+    await expect(page.locator('#creation-view h1')).toHaveText('笔记管理');
+    await expect(page.locator('.workspace-pane')).toHaveCount(2);
     const flowMetrics = await page.evaluate(() => {
-      const steps = document.querySelector('.creation-steps').getBoundingClientRect();
+      const header = document.querySelector('.creation-header').getBoundingClientRect();
       const firstPane = document.querySelector('.workspace-pane').getBoundingClientRect();
-      return { stepsHeight: steps.height, stepsBottom: steps.bottom, firstPaneTop: firstPane.top };
+      return { headerBottom: header.bottom, firstPaneTop: firstPane.top };
     });
-    expect(flowMetrics.stepsHeight).toBeGreaterThanOrEqual(40);
-    expect(flowMetrics.firstPaneTop).toBeGreaterThanOrEqual(flowMetrics.stepsBottom - 1);
+    expect(flowMetrics.firstPaneTop).toBeGreaterThanOrEqual(flowMetrics.headerBottom - 1);
 
     const paneWidths = await page.locator('.workspace-pane').evaluateAll((panes) => (
       panes.map((pane) => {
@@ -441,19 +442,19 @@ test.describe('@mobile mobile layout', () => {
     await page.locator('#btn-close-navigator').click();
     await expect(page.locator('#reader-navigator')).toBeHidden();
     await page.locator('#btn-reader-tools').click();
-    await page.locator('#btn-toggle-ai').click();
+    await expect(page.locator('#btn-toggle-ai, #btn-toggle-tts')).toHaveCount(0);
+    await page.locator('#btn-toggle-notes').click();
+    await expect(page.locator('#notes-panel')).toBeVisible();
     await expect(page.locator('#reader-tool-panel')).toBeHidden();
-    await expect(page.locator('#ai-panel')).toBeVisible();
     await expect(page.locator('#reader-panel-backdrop')).toBeVisible();
-
-    await page.locator('#btn-close-ai').click();
-    await expect(page.locator('#ai-panel')).toBeHidden();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#notes-panel')).toBeHidden();
+    await expect(page.locator('#btn-reader-tools')).toBeFocused();
     await expect(page.locator('#reader-panel-backdrop')).toBeHidden();
 
     await page.locator('#btn-reader-tools').click();
     await page.locator('#btn-toggle-notes').click();
     await expect(page.locator('#notes-panel')).toBeVisible();
-    await expect(page.locator('#ai-panel')).toBeHidden();
     await page.locator('#btn-close-notes-panel').click();
     await expect(page.locator('#notes-panel')).toBeHidden();
 

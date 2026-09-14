@@ -1,4 +1,4 @@
-"""Tests for chat and embedding configuration isolation."""
+"""Tests for reader configuration and removed-feature isolation."""
 
 from __future__ import annotations
 
@@ -49,53 +49,16 @@ def _load_settings(monkeypatch, values: dict[str, str]):
     return module.settings
 
 
-def test_chat_and_embedding_endpoints_are_independent(monkeypatch):
-    settings = _load_settings(
-        monkeypatch,
-        {
-            "LLM_BASE_URL": "https://chat.example/v1/",
-            "LLM_API_KEY": "chat-key",
-            "LLM_MODEL": "chat-model",
-            "EMBEDDING_BASE_URL": "http://127.0.0.1:11434/v1/",
-            "EMBEDDING_API_KEY": "ollama",
-            "EMBEDDING_MODEL": "embedding-model",
-        },
+def test_removed_feature_settings_are_ignored(monkeypatch):
+    settings = _load_settings(monkeypatch, {
+        "LLM_BASE_URL": "https://unused.example/v1",
+        "EMBEDDING_MODEL": "unused-model",
+        "TTS_ENABLED": "true",
+    })
+    assert not any(
+        name.startswith(("llm_", "embedding_", "tts_"))
+        for name in dir(settings)
     )
-
-    assert settings.llm_base_url == "https://chat.example/v1"
-    assert settings.llm_model == "chat-model"
-    assert settings.embedding_base_url == "http://127.0.0.1:11434/v1"
-    assert settings.embedding_api_key == "ollama"
-    assert settings.embedding_model == "embedding-model"
-
-
-def test_legacy_embedding_model_and_endpoint_fallback(monkeypatch):
-    settings = _load_settings(
-        monkeypatch,
-        {
-            "LLM_BASE_URL": "https://legacy.example/v1",
-            "LLM_API_KEY": "legacy-key",
-            "LLM_EMBEDDING_MODEL": "legacy-embedding",
-        },
-    )
-
-    assert settings.embedding_base_url == "https://legacy.example/v1"
-    assert settings.embedding_api_key == "legacy-key"
-    assert settings.embedding_model == "legacy-embedding"
-    assert settings.llm_embedding_model == "legacy-embedding"
-
-
-def test_api_keys_ignore_inline_annotations(monkeypatch):
-    settings = _load_settings(
-        monkeypatch,
-        {
-            "LLM_API_KEY": "sk-chat annotation",
-            "EMBEDDING_API_KEY": "ollama local-only",
-        },
-    )
-
-    assert settings.llm_api_key == "sk-chat"
-    assert settings.embedding_api_key == "ollama"
 
 
 def test_production_security_settings_are_parsed(monkeypatch):
@@ -124,25 +87,10 @@ def test_security_defaults_are_local_only(monkeypatch):
     assert settings.max_epub_upload_mb == 90
 
 
-def test_tts_defaults_and_environment_overrides(monkeypatch):
-    defaults = _load_settings(monkeypatch, {})
-    assert defaults.tts_enabled is True
-    assert defaults.tts_provider == "edge-tts"
-    assert defaults.tts_default_voice == "zh-CN-XiaoxiaoNeural"
-    assert defaults.tts_max_concurrency == 3
-    assert defaults.tts_segment_max_chars == 1000
-
-    configured = _load_settings(monkeypatch, {
-        "TTS_ENABLED": "false",
-        "TTS_MAX_CONCURRENCY": "4",
-        "TTS_MAX_RETRIES": "2",
-        "TTS_SEGMENT_MAX_CHARS": "800",
-        "TTS_REQUEST_TIMEOUT": "45",
-        "TTS_CACHE_RETENTION_DAYS": "7",
+def test_upload_limit_and_vault_override(monkeypatch):
+    settings = _load_settings(monkeypatch, {
+        "MAX_EPUB_UPLOAD_MB": "12",
+        "OBSIDIAN_VAULT_PATH": "test-vault",
     })
-    assert configured.tts_enabled is False
-    assert configured.tts_max_concurrency == 4
-    assert configured.tts_max_retries == 2
-    assert configured.tts_segment_max_chars == 800
-    assert configured.tts_request_timeout == 45
-    assert configured.tts_cache_retention_days == 7
+    assert settings.max_epub_upload_mb == 12
+    assert settings.obsidian_vault_path == "test-vault"

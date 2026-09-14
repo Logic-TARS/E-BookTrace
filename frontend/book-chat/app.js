@@ -9,39 +9,61 @@
   const SEARCH_DELAY = 280;
   const PROGRESS_DELAY = 700;
   const MAX_SEARCH_RESULTS = 60;
-  const THEME_COLORS = {
-    dark: '#171717',
-    light: '#faf8f3',
+  const THEME_SEQUENCE = ['dark', 'light', 'sepia'];
+  const THEME_META = {
+    dark: { label: '深色', icon: '☾', color: '#171717' },
+    light: { label: '浅色', icon: '☀', color: '#ffffff' },
+    sepia: { label: '护眼', icon: '❀', color: '#f6efdd' },
   };
   const EPUB_THEMES = {
     dark: {
       'html, body': {
         color: '#e7e1d8 !important',
-        background: '#211f1c !important',
+        background: '#1d1d1d !important',
       },
       body: {
-        'font-family': 'Georgia, "Noto Serif CJK SC", "Songti SC", serif',
+        'font-family': 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
         'line-height': '1.75',
-        padding: '0 5% !important',
+        'max-width': '46rem !important',
+        'margin': '0 auto !important',
+        'padding': '0 24px !important',
       },
       'a, a:link, a:visited': { color: '#68cdb2 !important' },
       img: { 'max-width': '100% !important', 'max-height': '100% !important' },
     },
     light: {
       'html, body': {
-        color: '#262421 !important',
-        background: '#f5f2ea !important',
+        color: '#0d0d0d !important',
+        background: '#ffffff !important',
       },
       body: {
-        'font-family': 'Georgia, "Noto Serif CJK SC", "Songti SC", serif',
+        'font-family': 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
         'line-height': '1.75',
-        padding: '0 5% !important',
+        'max-width': '46rem !important',
+        'margin': '0 auto !important',
+        'padding': '0 24px !important',
       },
       'a, a:link, a:visited': { color: '#087f65 !important' },
       img: { 'max-width': '100% !important', 'max-height': '100% !important' },
     },
+    sepia: {
+      'html, body': {
+        color: '#463b2a !important',
+        background: '#f6efdd !important',
+      },
+      body: {
+        'font-family': 'Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
+        'line-height': '1.75',
+        'max-width': '46rem !important',
+        'margin': '0 auto !important',
+        'padding': '0 24px !important',
+      },
+      'a, a:link, a:visited': { color: '#0d7a5f !important' },
+      img: { 'max-width': '100% !important', 'max-height': '100% !important' },
+    },
   };
   const dom = {
+    appShell: document.querySelector('.app-shell'),
     sidebar: document.getElementById('sidebar'),
     backdrop: document.getElementById('backdrop'),
     openSidebar: document.getElementById('open-sidebar'),
@@ -61,7 +83,6 @@
     tocList: document.getElementById('toc-list'),
     tocEmpty: document.getElementById('toc-empty'),
     tocBookTitle: document.getElementById('toc-book-title'),
-    tocBookAuthor: document.getElementById('toc-book-author'),
     chapterTitle: document.getElementById('chapter-title'),
     pageLabel: document.getElementById('page-label'),
     progressLabel: document.getElementById('progress-label'),
@@ -80,6 +101,7 @@
     searchResults: document.getElementById('search-results'),
     toast: document.getElementById('toast'),
   };
+  const stateMarkLogo = dom.stateMark.querySelector('svg');
 
   let books = [];
   let selectedBook = null;
@@ -132,14 +154,14 @@
   }
 
   function setTheme(nextTheme, persist = false) {
-    theme = nextTheme === 'light' ? 'light' : 'dark';
+    theme = THEME_SEQUENCE.includes(nextTheme) ? nextTheme : 'dark';
     document.documentElement.dataset.theme = theme;
-    const target = theme === 'dark' ? '浅色' : '深色';
-    const label = `切换到${target}模式`;
+    const target = THEME_SEQUENCE[(THEME_SEQUENCE.indexOf(theme) + 1) % THEME_SEQUENCE.length];
+    const label = `切换到${THEME_META[target].label}模式`;
     dom.themeToggle.setAttribute('aria-label', label);
     dom.themeToggle.title = label;
-    dom.themeIcon.textContent = theme === 'dark' ? '☀' : '☾';
-    dom.themeColor.setAttribute('content', THEME_COLORS[theme]);
+    dom.themeIcon.textContent = THEME_META[target].icon;
+    dom.themeColor.setAttribute('content', THEME_META[theme].color);
     if (persist) {
       followsSystemTheme = false;
       writeStorage(STORAGE.theme, theme);
@@ -149,7 +171,7 @@
 
   function initTheme() {
     const saved = readStorage(STORAGE.theme);
-    followsSystemTheme = saved !== 'light' && saved !== 'dark';
+    followsSystemTheme = !THEME_SEQUENCE.includes(saved);
     setTheme(followsSystemTheme && systemTheme.matches ? 'light' : saved, false);
   }
 
@@ -207,12 +229,25 @@
 
   function setSidebarOpen(open) {
     const mobile = window.matchMedia('(max-width: 760px)').matches;
-    const visible = mobile && open;
-    dom.sidebar.classList.toggle('open', visible);
-    dom.sidebar.setAttribute('aria-hidden', String(mobile && !visible));
-    dom.openSidebar.setAttribute('aria-expanded', String(visible));
-    dom.backdrop.hidden = !visible;
-    if (visible) dom.closeSidebar.focus();
+    if (mobile) {
+      dom.appShell.classList.remove('sidebar-collapsed');
+      dom.sidebar.classList.toggle('open', open);
+      dom.sidebar.setAttribute('aria-hidden', String(!open));
+      dom.openSidebar.setAttribute('aria-expanded', String(open));
+      dom.backdrop.hidden = !open;
+      if (open) dom.closeSidebar.focus();
+    } else {
+      dom.sidebar.classList.remove('open');
+      dom.backdrop.hidden = true;
+      dom.appShell.classList.toggle('sidebar-collapsed', !open);
+      dom.sidebar.setAttribute('aria-hidden', String(!open));
+      dom.openSidebar.setAttribute('aria-expanded', String(open));
+      window.setTimeout(scheduleRenditionResize, 200);
+    }
+  }
+
+  function closeSidebarOnMobile() {
+    if (window.matchMedia('(max-width: 760px)').matches) setSidebarOpen(false);
   }
 
   function setSidebarTab(name, focus = false) {
@@ -237,9 +272,12 @@
     });
   }
 
-  function setReaderState(state, title, description, actionLabel) {
+  function setReaderState(state, title, description, actionLabel, action = () => dom.epubInput.click()) {
+    dom.stateAction.onclick = actionLabel ? action : null;
     dom.readerState.dataset.state = state;
-    dom.stateMark.textContent = state === 'error' ? '!' : 'M';
+    dom.stateMark.textContent = '';
+    if (state === 'error') dom.stateMark.textContent = '!';
+    else if (stateMarkLogo) dom.stateMark.appendChild(stateMarkLogo);
     dom.stateTitle.textContent = title;
     dom.stateDescription.textContent = description;
     dom.stateAction.textContent = actionLabel || '';
@@ -269,14 +307,13 @@
       button.setAttribute('role', 'listitem');
       button.setAttribute('aria-current', String(Boolean(selectedBook && selectedBook.id === book.id)));
       button.append(
-        makeElement('strong', '', book.title || book.original_filename || book.filename || '未命名书籍'),
-        makeElement('span', '', book.author || '作者未知')
+        makeElement('strong', '', book.title || book.original_filename || book.filename || '未命名对话')
       );
       button.addEventListener('click', () => selectBook(book.id));
       dom.bookList.appendChild(button);
     });
     dom.libraryEmpty.hidden = books.length > 0;
-    if (!books.length) dom.libraryEmpty.textContent = '书库中还没有 EPUB，点击上方按钮导入。';
+    if (!books.length) dom.libraryEmpty.textContent = '还没有对话，点击上方按钮开始。';
   }
 
   function flattenToc(items, output = [], parentLabel = '') {
@@ -295,13 +332,13 @@
   function renderTocBranch(items, parent) {
     (items || []).forEach(item => {
       const branch = makeElement('div', 'toc-branch');
-      const button = makeElement('button', 'toc-button', item.label || item.title || '未命名章节');
+      const button = makeElement('button', 'toc-button', item.label || item.title || '未命名');
       button.type = 'button';
       button.dataset.href = item.href || '';
       button.title = button.textContent;
       button.addEventListener('click', () => {
         if (rendition && item.href) rendition.display(item.href);
-        setSidebarOpen(false);
+        closeSidebarOnMobile();
       });
       branch.appendChild(button);
       renderTocBranch(item.subitems || item.children || [], branch);
@@ -314,7 +351,7 @@
     flatToc = flattenToc(toc, []);
     renderTocBranch(toc, dom.tocList);
     dom.tocEmpty.hidden = flatToc.length > 0;
-    dom.tocEmpty.textContent = flatToc.length ? '' : '这本 EPUB 没有可用目录。';
+    dom.tocEmpty.textContent = flatToc.length ? '' : '没有可用大纲。';
     updateActiveToc(currentLocation && currentLocation.start && currentLocation.start.href);
   }
 
@@ -348,8 +385,8 @@
       if (active) button.setAttribute('aria-current', 'location');
       else button.removeAttribute('aria-current');
     });
-    if (chapter) dom.chapterTitle.textContent = chapter.label || chapter.title || '未命名章节';
-    else if (href) dom.chapterTitle.textContent = href.split('/').pop().split('#')[0] || '正文';
+    if (chapter) dom.chapterTitle.textContent = chapter.label || chapter.title || '未命名';
+    else if (href) dom.chapterTitle.textContent = href.split('/').pop().split('#')[0] || '内容';
   }
 
   function selectRestoredProgress(serverState, fallback) {
@@ -465,7 +502,7 @@
     if (options.keepalive) requestOptions.keepalive = true;
     try {
       const response = await fetch(`/api/books/${encodeURIComponent(pending.bookId)}/sync`, requestOptions);
-      if (!response.ok) throw new Error(await parseError(response, '阅读进度同步失败'));
+      if (!response.ok) throw new Error(await parseError(response, '同步失败'));
       if (pendingProgress && pendingProgress.op_id === pending.op_id) pendingProgress = null;
       return true;
     } catch (_error) {
@@ -520,26 +557,33 @@
   }
 
   async function loadBooks(preferredId) {
-    const response = await fetch('/api/books');
-    if (!response.ok) throw new Error(await parseError(response, '无法加载书库'));
-    const data = await response.json();
-    books = Array.isArray(data.books) ? data.books : [];
-    if (preferredId !== undefined) selectedBook = books.find(book => book.id === preferredId) || selectedBook;
-    renderBooks();
-    const wanted = preferredId === undefined ? readStorage(STORAGE.selectedBook) : preferredId;
-    if (wanted && books.some(book => book.id === wanted)) await selectBook(wanted);
-    else if (!books.length) setReaderState('empty', '书库还是空的', '导入一本 EPUB 后，它会出现在左侧服务器书库中。', '导入 EPUB');
-    else setReaderState('idle', '选择一本书开始阅读', '从左侧服务器书库打开 EPUB。阅读、翻页和搜索都在此页面完成。');
+    setReaderState('loading', '正在加载', '');
+    try {
+      const response = await fetch('/api/books');
+      if (!response.ok) throw new Error(await parseError(response, '无法加载列表'));
+      const data = await response.json();
+      books = Array.isArray(data.books) ? data.books : [];
+      if (preferredId !== undefined) selectedBook = books.find(book => book.id === preferredId) || selectedBook;
+      renderBooks();
+      const wanted = preferredId === undefined ? readStorage(STORAGE.selectedBook) : preferredId;
+      if (wanted && books.some(book => book.id === wanted)) await selectBook(wanted);
+      else if (!books.length) setReaderState('empty', '有什么可以帮忙的？', '开始一个新对话，它会出现在左侧列表中。', '新聊天');
+      else setReaderState('idle', '有什么可以帮忙的？', '从左侧选择一个对话继续。');
+    } catch (error) {
+      dom.libraryEmpty.hidden = false;
+      dom.libraryEmpty.textContent = '暂时无法加载列表。';
+      setReaderState('error', '无法连接服务器', error.message || '请确认服务已启动后重试。', '重试', () => loadBooks(preferredId));
+    }
   }
 
   async function loadSyncState(bookId, token) {
     try {
       const response = await fetch(`/api/books/${encodeURIComponent(bookId)}/sync`);
       if (token !== selectionToken) return null;
-      if (!response.ok) throw new Error(await parseError(response, '无法读取阅读进度'));
+      if (!response.ok) throw new Error(await parseError(response, '无法读取记录'));
       return await response.json();
     } catch (error) {
-      if (token === selectionToken) showToast('服务器进度暂不可用，将使用本机位置');
+      if (token === selectionToken) showToast('记录同步暂不可用');
       return null;
     }
   }
@@ -553,14 +597,13 @@
     renderBooks();
     clearSearch();
     dom.searchInput.value = '';
-    dom.tocBookTitle.textContent = match.title || match.original_filename || match.filename || '未命名书籍';
-    dom.tocBookAuthor.textContent = match.author || '作者未知';
+    dom.tocBookTitle.textContent = match.title || match.original_filename || match.filename || '未命名对话';
     dom.chapterTitle.textContent = '正在准备…';
     dom.pageLabel.textContent = '第 0 / 0 页';
     dom.progressLabel.textContent = '计算中…';
     setSidebarTab('toc');
-    setSidebarOpen(false);
-    setReaderState('loading', '正在下载 EPUB', '先恢复阅读进度，再从服务器获取书籍文件。');
+    closeSidebarOnMobile();
+    setReaderState('loading', '正在载入', '正在准备内容…');
     await destroyReader();
     if (token !== selectionToken) return;
 
@@ -574,10 +617,10 @@
       const response = await fetch(`/api/books/${encodeURIComponent(match.id)}/file`, {
         signal: downloadController.signal,
       });
-      if (!response.ok) throw new Error(await parseError(response, 'EPUB 下载失败'));
+      if (!response.ok) throw new Error(await parseError(response, '载入失败'));
       const arrayBuffer = await response.arrayBuffer();
       if (token !== selectionToken) return;
-      setReaderState('loading', '正在解析 EPUB', '正在读取书籍元数据、正文和章节目录。');
+      setReaderState('loading', '正在载入', '正在准备内容…');
       const blob = new Blob([arrayBuffer], { type: 'application/epub+zip' });
       currentBookUrl = URL.createObjectURL(blob);
       currentBook = ePub(currentBookUrl, { openAs: 'epub' });
@@ -587,11 +630,13 @@
       rendition = currentBook.renderTo(dom.epubContainer, {
         width: Math.floor(readerBounds.width),
         height: Math.floor(readerBounds.height),
-        flow: 'paginated',
+        flow: 'scrolled',
+        manager: 'continuous',
         spread: 'none',
       });
       rendition.themes.register('dark', EPUB_THEMES.dark);
       rendition.themes.register('light', EPUB_THEMES.light);
+      rendition.themes.register('sepia', EPUB_THEMES.sepia);
       applyRenditionTheme();
       rendition.on('relocated', location => {
         if (token !== selectionToken) return;
@@ -605,9 +650,19 @@
         doc.documentElement.dataset.chatReaderKeys = 'true';
         doc.addEventListener('keydown', event => {
           if (event.altKey || event.ctrlKey || event.metaKey) return;
+          const target = event.target;
+          if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ''))) return;
           if (event.key === 'ArrowLeft') navigatePage('prev');
           if (event.key === 'ArrowRight') navigatePage('next');
+          handleReaderScrollKey(event);
         });
+        doc.addEventListener('wheel', event => {
+          if (event.ctrlKey) return;
+          const scroller = readerScroller();
+          if (!scroller) return;
+          event.preventDefault();
+          scroller.scrollTop += event.deltaMode === 1 ? event.deltaY * 33 : event.deltaY;
+        }, { passive: false });
       });
 
       const [navigation, metadata] = await Promise.all([
@@ -618,19 +673,18 @@
       toc = Array.isArray(navigation.toc) ? navigation.toc : [];
       renderToc();
       if (metadata.title) dom.tocBookTitle.textContent = metadata.title;
-      if (metadata.creator) dom.tocBookAuthor.textContent = metadata.creator;
       const startCfi = restoredProgress && restoredProgress.cfi || undefined;
       await rendition.display(startCfi);
       if (token !== selectionToken) return;
       showReader();
       progressReady = true;
       if (currentLocation) updateLocationUi(currentLocation);
-      setSidebarOpen(false);
+      closeSidebarOnMobile();
       warmLocations(currentBook, token);
     } catch (error) {
       if (error.name === 'AbortError' || token !== selectionToken) return;
       await destroyReader({ flush: false });
-      setReaderState('error', '无法打开这本书', error.message || 'EPUB 下载或解析失败，请重试。', '重试');
+      setReaderState('error', '无法载入内容', error.message || '载入失败，请重试。', '重试', () => selectBook(match.id));
     } finally {
       if (token === selectionToken) downloadController = null;
     }
@@ -649,15 +703,26 @@
       if (token === selectionToken) dom.progressLabel.textContent = restoredProgress
         && Number.isFinite(Number(restoredProgress.progress_percent))
         ? `${Math.round(Number(restoredProgress.progress_percent))}%`
-        : '页码可用';
+        : '就绪';
     }
   }
 
-  function currentSpineSection() {
-    if (!currentBook || !currentLocation || !currentLocation.start) return null;
-    const href = cleanHref(currentLocation.start.href);
-    const items = currentBook.spine && currentBook.spine.spineItems || [];
-    return items.find(item => hrefMatches(item.href, href)) || null;
+  function readerScroller() {
+    const manager = rendition && rendition.manager;
+    return manager && manager.container || null;
+  }
+
+  function handleReaderScrollKey(event) {
+    const scroller = readerScroller();
+    if (!scroller) return;
+    const line = 48;
+    const screen = Math.max(120, scroller.clientHeight - 96);
+    if (event.key === 'ArrowDown') scroller.scrollTop += line;
+    else if (event.key === 'ArrowUp') scroller.scrollTop -= line;
+    else if (event.key === 'PageDown') scroller.scrollTop += screen;
+    else if (event.key === 'PageUp') scroller.scrollTop -= screen;
+    else return;
+    event.preventDefault();
   }
 
   async function navigatePage(direction) {
@@ -666,15 +731,9 @@
     if (direction === 'prev' && currentLocation.atStart) return;
     navigationBusy = true;
     try {
-      const displayed = currentLocation.start.displayed || {};
-      const section = currentSpineSection();
-      if (direction === 'next' && Number(displayed.page) >= Number(displayed.total) && section && section.next()) {
-        await rendition.display(section.next().href, false);
-      } else {
-        await (direction === 'next' ? rendition.next() : rendition.prev());
-      }
+      await (direction === 'next' ? rendition.next() : rendition.prev());
     } catch (_error) {
-      showToast('暂时无法翻页');
+      showToast('暂时无法跳转');
     } finally {
       window.setTimeout(() => { navigationBusy = false; }, 100);
     }
@@ -687,8 +746,8 @@
       .slice(0, MAX_SEARCH_RESULTS)
       .map(item => ({
         kind: 'chapter',
-        title: item.label || item.title || '未命名章节',
-        excerpt: item._readerParentLabel ? `目录章节 · ${item._readerParentLabel}` : '目录章节',
+        title: item.label || item.title || '未命名',
+        excerpt: '大纲',
         target: item.href,
       }));
   }
@@ -721,7 +780,7 @@
         const end = Math.min(text.length, match + query.length + 58);
         results.push({
           kind: 'text',
-          title: findChapter(section.href)?.label || section.href || '正文匹配',
+          title: findChapter(section.href)?.label || section.href || '内容匹配',
           excerpt: `${start ? '…' : ''}${text.slice(start, end).trim()}${end < text.length ? '…' : ''}`,
           target: cfi || section.href,
         });
@@ -736,7 +795,7 @@
     const sections = (book.spine && book.spine.spineItems || []).filter(section => section && section.linear !== 'no');
     for (let index = 0; index < sections.length; index += 1) {
       if (token !== searchToken || book !== currentBook) return null;
-      dom.searchStatus.textContent = `正在搜索正文 ${index + 1} / ${sections.length}…`;
+      dom.searchStatus.textContent = `正在检索 ${index + 1} / ${sections.length}…`;
       const section = sections[index];
       try {
         const loaded = await section.load(book.load.bind(book));
@@ -766,7 +825,7 @@
       button.append(
         makeElement('strong', '', result.title),
         makeElement('span', '', result.excerpt),
-        makeElement('small', '', result.kind === 'chapter' ? '章节' : '正文')
+        makeElement('small', '', result.kind === 'chapter' ? '大纲' : '内容')
       );
       button.addEventListener('click', () => activateSearchResult(index));
       dom.searchResults.appendChild(button);
@@ -797,7 +856,7 @@
   function showSearchPrompt() {
     if (!currentBook || dom.searchInput.value.trim()) return;
     clearSearch(false);
-    dom.searchStatus.textContent = '输入章节名，或至少两个字搜索正文';
+    dom.searchStatus.textContent = '输入关键词检索当前内容';
     dom.searchPopover.hidden = false;
     dom.searchInput.setAttribute('aria-expanded', 'true');
   }
@@ -812,7 +871,7 @@
       return;
     }
     const chapters = chapterSearchResults(query);
-    renderSearchResults(chapters, chapters.length ? `找到 ${chapters.length} 个章节匹配` : '没有章节匹配');
+    renderSearchResults(chapters, chapters.length ? `找到 ${chapters.length} 个匹配` : '没有匹配');
     if (query.length < 2) return;
     const token = ++searchToken;
     const book = currentBook;
@@ -821,7 +880,7 @@
       if (!textResults || token !== searchToken || book !== currentBook) return;
       const combined = [...chapters, ...textResults].slice(0, MAX_SEARCH_RESULTS);
       const status = combined.length
-        ? `找到 ${chapters.length} 个章节、${textResults.length} 条正文匹配`
+        ? `找到 ${chapters.length} 个大纲、${textResults.length} 条内容匹配`
         : '没有找到匹配内容';
       renderSearchResults(combined, status);
     }, SEARCH_DELAY);
@@ -830,24 +889,42 @@
   async function uploadBook(file) {
     if (!file) return;
     dom.importButton.disabled = true;
-    dom.importButton.querySelector('span:last-child').textContent = '正在导入…';
-    setReaderState('loading', '正在导入 EPUB', '文件正在上传到服务器书库。');
+    dom.importButton.querySelector('span:last-child').textContent = '正在创建…';
+    setReaderState('loading', '正在创建', '请稍候…');
     try {
       const form = new FormData();
       form.append('file', file);
       const response = await fetch('/api/books/upload', { method: 'POST', body: form });
-      if (!response.ok) throw new Error(await parseError(response, 'EPUB 导入失败'));
+      if (!response.ok) throw new Error(await parseError(response, '创建失败'));
       const result = await response.json();
-      if (!result.book || !result.book.id) throw new Error('服务器没有返回书籍信息');
-      showToast(result.created === false ? '这本书已在服务器书库中' : 'EPUB 已导入');
+      if (!result.book || !result.book.id) throw new Error('服务器没有返回数据');
+      showToast(result.created === false ? '已经存在同样的内容' : '已创建');
       await loadBooks(result.book.id);
     } catch (error) {
-      setReaderState('error', 'EPUB 导入失败', error.message || '请检查文件后重试。', '重新选择文件');
+      setReaderState('error', '创建失败', error.message || '请检查文件后重试。', '重试');
     } finally {
       dom.epubInput.value = '';
       dom.importButton.disabled = false;
-      dom.importButton.querySelector('span:last-child').textContent = '导入 EPUB';
+      dom.importButton.querySelector('span:last-child').textContent = '新聊天';
     }
+  }
+
+  function scheduleRenditionResize() {
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(async () => {
+      if (!rendition || !currentLocation || dom.epubContainer.hidden) return;
+      const cfi = currentLocation.start && currentLocation.start.cfi;
+      const bounds = dom.epubContainer.getBoundingClientRect();
+      if (bounds.width < 2 || bounds.height < 2) return;
+      const width = Math.floor(bounds.width);
+      const height = Math.floor(bounds.height);
+      const size = rendition.manager.stage.size();
+      if (size.width === width && size.height === height) return;
+      try {
+        rendition.resize(width, height);
+        if (cfi) await rendition.display(cfi);
+      } catch (_error) {}
+    }, 120);
   }
 
   function bindEvents() {
@@ -866,16 +943,15 @@
     });
     dom.openSidebar.addEventListener('click', () => setSidebarOpen(true));
     dom.closeSidebar.addEventListener('click', () => setSidebarOpen(false));
-    dom.themeToggle.addEventListener('click', () => setTheme(theme === 'dark' ? 'light' : 'dark', true));
+    dom.themeToggle.addEventListener('click', () => {
+      const next = THEME_SEQUENCE[(THEME_SEQUENCE.indexOf(theme) + 1) % THEME_SEQUENCE.length];
+      setTheme(next, true);
+    });
     systemTheme.addEventListener('change', event => {
       if (followsSystemTheme) setTheme(event.matches ? 'light' : 'dark', false);
     });
     dom.backdrop.addEventListener('click', () => setSidebarOpen(false));
     dom.importButton.addEventListener('click', () => dom.epubInput.click());
-    dom.stateAction.addEventListener('click', () => {
-      if (dom.readerState.dataset.state === 'error' && selectedBook) selectBook(selectedBook.id);
-      else dom.epubInput.click();
-    });
     dom.epubInput.addEventListener('change', () => uploadBook(dom.epubInput.files[0]));
     dom.previousPage.addEventListener('click', () => navigatePage('prev'));
     dom.nextPage.addEventListener('click', () => navigatePage('next'));
@@ -911,22 +987,13 @@
       if (event.target === dom.searchInput || event.altKey || event.ctrlKey || event.metaKey) return;
       if (event.key === 'ArrowLeft') navigatePage('prev');
       if (event.key === 'ArrowRight') navigatePage('next');
-      if (event.key === 'Escape') setSidebarOpen(false);
+      const target = event.target;
+      const interactive = target && target.closest && target.closest('button, a, input, textarea, select, [role="tab"], [role="option"]');
+      if (!interactive) handleReaderScrollKey(event);
+      if (event.key === 'Escape') closeSidebarOnMobile();
     });
-    window.matchMedia('(max-width: 760px)').addEventListener('change', () => setSidebarOpen(false));
-    window.addEventListener('resize', () => {
-      window.clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(async () => {
-        if (!rendition || !currentLocation || dom.epubContainer.hidden) return;
-        const cfi = currentLocation.start && currentLocation.start.cfi;
-        const bounds = dom.epubContainer.getBoundingClientRect();
-        if (bounds.width < 2 || bounds.height < 2) return;
-        try {
-          rendition.resize(Math.floor(bounds.width), Math.floor(bounds.height));
-          if (cfi) await rendition.display(cfi);
-        } catch (_error) {}
-      }, 120);
-    });
+    window.matchMedia('(max-width: 760px)').addEventListener('change', event => setSidebarOpen(!event.matches));
+    window.addEventListener('resize', scheduleRenditionResize);
     window.addEventListener('pagehide', () => {
       if (progressReady && currentLocation) pendingProgress = captureProgress(currentLocation);
       flushProgress({ keepalive: true });
@@ -944,15 +1011,8 @@
     renderBooks();
     renderToc();
     setSidebarTab('library');
-    setSidebarOpen(false);
-    setReaderState('loading', '正在连接服务器书库', '正在读取可用的 EPUB。');
-    try {
-      await loadBooks();
-    } catch (error) {
-      dom.libraryEmpty.hidden = false;
-      dom.libraryEmpty.textContent = '无法加载服务器书库。';
-      setReaderState('error', '无法连接书库', error.message || '请确认服务已启动后重试。', '重试');
-    }
+    setSidebarOpen(!window.matchMedia('(max-width: 760px)').matches);
+    await loadBooks();
   }
 
   init();

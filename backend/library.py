@@ -108,7 +108,7 @@ async def reconcile_legacy_books() -> None:
 
 
 async def _register_existing_file(path: Path, original_filename: str) -> dict:
-    from knowledge import _read_epub_metadata, _validate_epub_archive
+    from books_api import _read_epub_metadata, _validate_epub_archive
 
     _validate_epub_archive(path)
     content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -142,7 +142,6 @@ async def _register_existing_file(path: Path, original_filename: str) -> dict:
         await db.commit()
     finally:
         await db.close()
-    await ensure_library_knowledge(book_id)
     return await get_library_book(book_id) or {}
 
 
@@ -162,10 +161,9 @@ async def upload_library_book(
     content_hash = hashlib.sha256(content).hexdigest()
     existing = await get_library_book_by_hash(content_hash)
     if existing:
-        await ensure_library_knowledge(existing["id"])
-        return (await get_library_book(existing["id"]) or existing), False
+        return existing, False
 
-    from knowledge import KnowledgeError, _read_epub_metadata, _validate_epub_archive
+    from books_api import EpubError, _read_epub_metadata, _validate_epub_archive
 
     book_id = str(uuid.uuid4())
     storage_filename = f"{book_id}.epub"
@@ -176,7 +174,7 @@ async def upload_library_book(
         _validate_epub_archive(temp_path)
         parsed_title, parsed_author = _read_epub_metadata(temp_path)
         os.replace(temp_path, final_path)
-    except KnowledgeError as exc:
+    except EpubError as exc:
         temp_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=exc.status_code,
@@ -214,8 +212,7 @@ async def upload_library_book(
         existing = await get_library_book_by_hash(content_hash)
         if not existing:
             raise
-        await ensure_library_knowledge(existing["id"])
-        return (await get_library_book(existing["id"]) or existing), False
+        return existing, False
     except Exception:
         # Do not leave an untracked EPUB on disk if the insert failed.
         final_path.unlink(missing_ok=True)
@@ -223,76 +220,15 @@ async def upload_library_book(
     finally:
         await db.close()
 
-    await ensure_library_knowledge(book_id)
     return (await get_library_book(book_id) or {}), True
 
 
-async def ensure_library_knowledge(book_id: str) -> dict | None:
-    """Point the AI index at the canonical server EPUB and enqueue indexing."""
-    book = await get_library_book(book_id, include_knowledge=False)
-    if not book:
-        return None
-
-    from knowledge import get_book_by_hash, register_server_book, reindex_book
-
-    existing = await get_book_by_hash(book["content_hash"])
-    source_path = str((BOOKS_DIR / book["filename"]).resolve())
-    if existing:
-        db = await _connect()
-        try:
-            await db.execute(
-                """
-                UPDATE qa_books
-                SET source_path = ?, source_kind = 'server',
-                    original_filename = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (source_path, book["original_filename"], _now(), existing["id"]),
-            )
-            await db.execute(
-                "UPDATE library_books SET knowledge_book_id = ?, updated_at = ? WHERE id = ?",
-                (existing["id"], _now(), book_id),
-            )
-            await db.commit()
-        finally:
-            await db.close()
-        if existing["status"] in {"failed", "outdated"}:
-            await reindex_book(existing["id"])
-        return existing
-
-    knowledge_book = await register_server_book(book["filename"])
+async def get_library_book(book_id: str) -> dict | None:
     db = await _connect()
     try:
-        await db.execute(
-            "UPDATE library_books SET knowledge_book_id = ?, updated_at = ? WHERE id = ?",
-            (knowledge_book["id"], _now(), book_id),
+        cursor = await db.execute(
+            "SELECT * FROM library_books WHERE id = ?", (book_id,)
         )
-        await db.commit()
-    finally:
-        await db.close()
-    return knowledge_book
-
-
-async def get_library_book(
-    book_id: str, *, include_knowledge: bool = True
-) -> dict | None:
-    db = await _connect()
-    try:
-        if include_knowledge:
-            cursor = await db.execute(
-                """
-                SELECT lb.*, qb.status AS knowledge_status,
-                       qb.error_message AS knowledge_error
-                FROM library_books lb
-                LEFT JOIN qa_books qb ON qb.id = lb.knowledge_book_id
-                WHERE lb.id = ?
-                """,
-                (book_id,),
-            )
-        else:
-            cursor = await db.execute(
-                "SELECT * FROM library_books WHERE id = ?", (book_id,)
-            )
         row = await cursor.fetchone()
         return _public_book(dict(row)) if row else None
     finally:
@@ -316,11 +252,7 @@ async def list_library_books() -> list[dict]:
     try:
         rows = await db.execute_fetchall(
             """
-            SELECT lb.*, qb.status AS knowledge_status,
-                   qb.error_message AS knowledge_error
-            FROM library_books lb
-            LEFT JOIN qa_books qb ON qb.id = lb.knowledge_book_id
-            ORDER BY lb.created_at DESC
+            SELECT * FROM library_books ORDER BY created_at DESC
             """
         )
         return [_public_book(dict(row)) for row in rows]
@@ -337,9 +269,6 @@ def _public_book(book: dict) -> dict:
         "original_filename": book["original_filename"],
         "content_hash": book["content_hash"],
         "file_size": book.get("file_size", 0),
-        "knowledge_book_id": book.get("knowledge_book_id"),
-        "knowledge_status": book.get("knowledge_status") or "unregistered",
-        "knowledge_error": book.get("knowledge_error") or "",
         "state_revision": book.get("state_revision", 0),
         "created_at": book.get("created_at"),
         "updated_at": book.get("updated_at"),
@@ -347,7 +276,7 @@ def _public_book(book: dict) -> dict:
 
 
 async def serve_library_book(book_id: str) -> FileResponse:
-    book = await get_library_book(book_id, include_knowledge=False)
+    book = await get_library_book(book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     path = (BOOKS_DIR / book["filename"]).resolve()
@@ -538,7 +467,7 @@ async def _upsert_synced_highlight(
                 book_id=?, client_id=?, book_title=?, book_author=?, chapter=?,
                 cfi=?, highlight_text=?, note=?, tags=?, color=?, created_at=?,
                 progress_percent=?, received_at=COALESCE(received_at, ?),
-                updated_at=?, status=?, knowledge_book_id=?
+                updated_at=?, status=?, knowledge_book_id=COALESCE(knowledge_book_id, ?)
             WHERE id=?
             """,
             (*values, rows[0]["id"]),
@@ -566,8 +495,8 @@ def _highlight_to_dict(row: aiosqlite.Row) -> dict:
 
 
 async def delete_library_book(book_id: str) -> bool:
-    """Delete a server book and all reader/AI data after staging its file."""
-    book = await get_library_book(book_id, include_knowledge=False)
+    """Delete a server book and its reader state after staging its file."""
+    book = await get_library_book(book_id)
     if not book:
         return False
     source = (BOOKS_DIR / book["filename"]).resolve()
@@ -590,9 +519,5 @@ async def delete_library_book(book_id: str) -> bool:
     finally:
         await db.close()
 
-    if book.get("knowledge_book_id"):
-        from knowledge import delete_knowledge_book
-
-        await delete_knowledge_book(book["knowledge_book_id"])
     staged.unlink(missing_ok=True)
     return True

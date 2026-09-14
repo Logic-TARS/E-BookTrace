@@ -18,6 +18,47 @@ BOOKS_DIR.mkdir(parents=True, exist_ok=True)
 
 # EPUB MIME type for FileResponse
 EPUB_MIME = "application/epub+zip"
+MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024
+MAX_ZIP_ENTRIES = 10_000
+
+
+class EpubError(RuntimeError):
+    def __init__(self, message: str, status_code: int = 422, code: str = "invalid_epub"):
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+def _validate_epub_archive(path: Path) -> None:
+    from zipfile import BadZipFile
+
+    try:
+        with ZipFile(path) as archive:
+            entries = archive.infolist()
+            if len(entries) > MAX_ZIP_ENTRIES:
+                raise EpubError("EPUB 内文件数量过多", 413, "epub_too_many_entries")
+            if sum(entry.file_size for entry in entries) > MAX_UNCOMPRESSED_BYTES:
+                raise EpubError("EPUB 解压后体积超过 500MB", 413, "epub_too_large")
+            if "META-INF/container.xml" not in archive.namelist():
+                raise EpubError("文件不是有效的 EPUB", 415, "invalid_epub")
+    except BadZipFile as exc:
+        raise EpubError("文件不是有效的 EPUB", 415, "invalid_epub") from exc
+
+
+def _read_epub_metadata(path: Path) -> tuple[str, str]:
+    from ebooklib import epub
+
+    try:
+        with path.open("rb") as source:
+            book = epub.read_epub(source, options={"ignore_ncx": True})
+        titles = book.get_metadata("DC", "title")
+        creators = book.get_metadata("DC", "creator")
+        return (
+            str(titles[0][0]).strip() if titles else "",
+            str(creators[0][0]).strip() if creators else "",
+        )
+    except Exception as exc:
+        raise EpubError("文件不是有效的 EPUB", 415, "invalid_epub") from exc
 
 
 def _extract_epub_meta(filepath: Path) -> dict[str, str]:

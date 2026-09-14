@@ -33,11 +33,6 @@
   const READER_PARAGRAPH_SPACING_MIN = 0;
   const READER_PARAGRAPH_SPACING_MAX = 2;
   const READER_SPACING_STEP = 0.1;
-  const TTS_POSITION_KEY = 'marginalia.tts.position';
-  const TTS_POLL_INTERVAL_MS = 1000;
-  const TTS_CONTENT_BLOCK_SELECTOR = 'h1, h2, h3, h4, p, li, blockquote, figcaption';
-  const TTS_FOLLOW_CLASS = 'marginalia-tts-follow';
-  const TTS_FOLLOW_UNDERLINE_CLASS = 'marginalia-tts-follow-underline';
   const VIEW_ROUTES = {
     home: '#/',
     reader: '#/reader',
@@ -68,10 +63,10 @@
   let currentCfi = '';
   let pendingSelection = null;  // { cfiRange, text } from last selection
   let selectedMaterialId = null;
-  let selectedMaterialIds = new Set();
-  let currentDraftId = null;
   let locationsReadyPromise = null;
   let locationsReadyBook = null;
+  let pendingProgressCfi = '';
+  let lastPersistedProgressKey = '';
   let lastPageInfo = null;
   let layoutRefreshToken = 0;
   let isLayoutRefreshing = false;
@@ -99,14 +94,8 @@
   let searchHighlightKeys = [];
   let searchToken = 0;            // bumped to cancel an in-flight book search
   let searchDebounceTimer = null;
-  let aiMessages = [];
-  let aiConversations = [];
-  let currentAiConversationId = null;
-  let aiRequestInFlight = false;
-  let aiIndexPollTimer = null;
   let pendingBookDelete = null;
   let lastDialogTrigger = null;
-  const knowledgeUploadsInFlight = new Set();
   let readerSyncTimer = null;
   const serverMigrationsInFlight = new Set();
   let operationBookId = null;
@@ -121,23 +110,6 @@
   let readerNotesHoverCloseTimer = null;
   let readerIframeObserver = null;
   let currentView = 'home';
-  let ttsTask = null;
-  let ttsChapterId = '';
-  let ttsSegmentIndex = 0;
-  let ttsPollTimer = null;
-  let ttsWantsPlay = false;
-  let ttsIsPlaying = false;
-  let ttsPlaybackStarting = false;
-  let ttsRestoredPosition = null;
-  let ttsLastSavedAt = 0;
-  let ttsFollowCfi = '';
-  let ttsFollowCueKey = '';
-  let ttsFollowUpdateToken = 0;
-  let ttsFollowNavigationInProgress = false;
-  let ttsFollowPendingNavigation = null;
-  let ttsFollowNavigationWorker = null;
-  let ttsFollowDocumentCache = null;
-  let ttsNavigationNoticeAt = 0;
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -178,25 +150,12 @@
     progressText: $('#progress-text'),
     pageText: $('#page-text'),
     btnBack: $('#btn-back'),
-    btnToggleAi: $('#btn-toggle-ai'),
     btnReaderTools: $('#btn-reader-tools'),
     btnRevealReaderChrome: $('#btn-reveal-reader-chrome'),
     readerToolPanel: $('#reader-tool-panel'),
-    btnCloseAi: $('#btn-close-ai'),
-    aiPanel: $('#ai-panel'),
-    aiMessages: $('#ai-messages'),
-    aiForm: $('#ai-form'),
-    aiQuestionInput: $('#ai-question-input'),
-    btnSendAi: $('#btn-send-ai'),
-    aiIndexStatus: $('#ai-index-status'),
-    aiConversationSelect: $('#ai-conversation-select'),
-    btnNewAiConversation: $('#btn-new-ai-conversation'),
-    btnDeleteAiConversation: $('#btn-delete-ai-conversation'),
-    btnRetryAiIndex: $('#btn-retry-ai-index'),
     btnAddBookmark: $('#btn-add-bookmark'),
     btnToggleNotes: $('#btn-toggle-notes'),
     btnToggleSearch: $('#btn-toggle-search'),
-    btnToggleTts: $('#btn-toggle-tts'),
     btnToggleReaderAutoHide: $('#btn-toggle-reader-auto-hide'),
     readerFontFamily: $('#reader-font-family'),
     readerFontSize: $('#reader-font-size'),
@@ -210,21 +169,6 @@
     readerParagraphSpacing: $('#reader-paragraph-spacing'),
     readerParagraphSpacingValue: $('#reader-paragraph-spacing-value'),
     btnReaderParagraphSpacingReset: $('#btn-reader-paragraph-spacing-reset'),
-    ttsPanel: $('#tts-panel'),
-    ttsStatus: $('#tts-status'),
-    ttsVoice: $('#tts-voice'),
-    ttsRate: $('#tts-rate'),
-    ttsContinuous: $('#tts-continuous'),
-    ttsAudio: $('#tts-audio'),
-    ttsProgress: $('#tts-progress'),
-    ttsTime: $('#tts-time'),
-    ttsSegmentLabel: $('#tts-segment-label'),
-    btnCloseTts: $('#btn-close-tts'),
-    btnTtsStart: $('#btn-tts-start'),
-    btnTtsPrev: $('#btn-tts-prev'),
-    btnTtsPlay: $('#btn-tts-play'),
-    btnTtsPause: $('#btn-tts-pause'),
-    btnTtsNext: $('#btn-tts-next'),
     toolbarSearch: $('#toolbar-search'),
     searchInput: $('#search-input'),
     btnSearch: $('#btn-search'),
@@ -258,21 +202,10 @@
     materialBookFilter: $('#material-book-filter'),
     materialTagFilter: $('#material-tag-filter'),
     materialsList: $('#materials-list'),
-    selectedMaterialCount: $('#selected-material-count'),
     selectedMaterialDetail: $('#selected-material-detail'),
     reflectionEditor: $('#reflection-editor'),
     btnSaveReflection: $('#btn-save-reflection'),
     btnDeleteReflection: $('#btn-delete-reflection'),
-    draftTopic: $('#draft-topic'),
-    draftInstruction: $('#draft-instruction'),
-    btnGenerateVideo: $('#btn-generate-video'),
-    btnGenerateArticle: $('#btn-generate-article'),
-    draftList: $('#draft-list'),
-    draftEditor: $('#draft-editor'),
-    draftTitleEditor: $('#draft-title-editor'),
-    draftContentEditor: $('#draft-content-editor'),
-    btnSaveDraft: $('#btn-save-draft'),
-    btnExportDraft: $('#btn-export-draft'),
     bookDeleteModal: $('#book-delete-modal'),
     bookDeleteMessage: $('#book-delete-message'),
     btnCancelBookDelete: $('#btn-cancel-book-delete'),
@@ -587,15 +520,24 @@
     }
   }
 
+  let viewHistoryIndex = history.state?.marginaliaIndex || 0;
+  let restoringHistory = false;
+
   function writeViewHistory(view, mode = 'push', extraState = {}) {
-    if (mode === 'none') return;
+    if (mode === 'none') {
+      viewHistoryIndex = history.state?.marginaliaIndex ?? viewHistoryIndex;
+      return;
+    }
+    const replace = mode === 'replace' || history.state?.marginaliaView === view;
+    if (!replace) viewHistoryIndex++;
     const state = {
       ...(history.state || {}),
       marginaliaView: view,
+      marginaliaIndex: viewHistoryIndex,
       ...extraState,
     };
     const route = VIEW_ROUTES[view] || VIEW_ROUTES.home;
-    if (mode === 'replace' || history.state?.marginaliaView === view) {
+    if (replace) {
       history.replaceState(state, '', route);
     } else {
       history.pushState(state, '', route);
@@ -611,9 +553,11 @@
   }
 
   async function showHome({ historyMode = 'push' } = {}) {
+    if (!discardUnsavedNotes()) return;
+    clearSelectedMaterial();
+    closeNoteEditor({ discard: true });
     // Flush progress to IndexedDB before clearing state
     await saveCurrentProgress();
-    stopTtsForChapter({ resetTask: true });
 
     // Destroy epub.js resources BEFORE nulling references
     if (currentRendition) {
@@ -637,11 +581,11 @@
     currentChapterId = '';
     pendingSelection = null;
     selectedMaterialId = null;
-    selectedMaterialIds.clear();
-    currentDraftId = null;
     _boundIframeDocuments = new WeakSet();
     locationsReadyPromise = null;
     locationsReadyBook = null;
+    pendingProgressCfi = '';
+    lastPersistedProgressKey = '';
 
     dom.libraryView.classList.add('active');
     dom.readerView.classList.remove('active');
@@ -651,7 +595,6 @@
     closeMobileReaderPanels();
     syncReaderPanelBackdrop();
     setReaderToolsOpen(false);
-    dom.ttsPanel.hidden = true;
     syncReaderToolStates();
     hideReaderLoading();
     hideSelectionToolbar();
@@ -709,7 +652,23 @@
   }
 
   async function handleHistoryNavigation(event) {
+    if (restoringHistory) {
+      restoringHistory = false;
+      return;
+    }
     const target = event.state?.marginaliaView || 'home';
+    const leaving = target !== currentView ||
+      (target === 'reader' && event.state?.bookId !== currentBookMeta?.id);
+    if (leaving && !discardUnsavedNotes()) {
+      const targetIndex = event.state?.marginaliaIndex;
+      if (Number.isInteger(targetIndex) && targetIndex !== viewHistoryIndex) {
+        restoringHistory = true;
+        history.go(viewHistoryIndex - targetIndex);
+      } else {
+        writeViewHistory(currentView, 'push', { bookId: currentBookMeta?.id || '' });
+      }
+      return;
+    }
     if (target === 'creation') {
       await showCreation({ historyMode: 'none' });
       return;
@@ -761,10 +720,8 @@
   function hasOpenReaderSurface() {
     return !dom.readerToolPanel.hidden ||
       (isMobileLayout() && !dom.readerNavigator.classList.contains('collapsed')) ||
-      !dom.aiPanel.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden ||
-      !dom.ttsPanel.hidden ||
       !dom.noteModal.hidden ||
       !dom.bookDeleteModal.hidden ||
       !dom.readerLoading.hidden;
@@ -1056,27 +1013,19 @@
     if (dom.btnToggleNavigator) {
       dom.btnToggleNavigator.setAttribute('aria-expanded', String(!dom.readerNavigator.classList.contains('collapsed')));
     }
-    if (dom.btnToggleAi) {
-      dom.btnToggleAi.setAttribute('aria-expanded', String(!dom.aiPanel.classList.contains('collapsed')));
-    }
     if (dom.btnToggleNotes) {
       dom.btnToggleNotes.setAttribute('aria-expanded', String(!dom.notesPanel.classList.contains('collapsed')));
     }
     if (dom.btnToggleSearch) {
       dom.btnToggleSearch.setAttribute('aria-expanded', String(!dom.searchPanel.hidden));
     }
-    if (dom.btnToggleTts) {
-      dom.btnToggleTts.setAttribute('aria-expanded', String(!dom.ttsPanel.hidden));
-    }
   }
 
   function syncReaderPanelBackdrop() {
     const hasOpenPanel = isMobileLayout() && dom.readerView.classList.contains('active') && (
       !dom.readerNavigator.classList.contains('collapsed') ||
-      !dom.aiPanel.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
-      !dom.searchPanel.hidden ||
-      !dom.ttsPanel.hidden
+      !dom.searchPanel.hidden
     );
     dom.readerPanelBackdrop.hidden = !hasOpenPanel;
     document.body.classList.toggle('reader-panel-open', hasOpenPanel);
@@ -1090,10 +1039,6 @@
       dom.readerNavigator.setAttribute('aria-hidden', 'true');
       dom.readerView.classList.remove('navigator-open');
     }
-    if (except !== 'ai') {
-      dom.aiPanel.classList.add('collapsed');
-      dom.readerMain.classList.add('ai-collapsed');
-    }
     if (except !== 'notes') {
       dom.notesPanel.classList.remove('open');
       dom.notesPanel.classList.add('collapsed');
@@ -1105,18 +1050,13 @@
       dom.toolbarSearch.hidden = true;
       dom.btnSearchClose.hidden = true;
     }
-    if (except !== 'tts') {
-      dom.ttsPanel.hidden = true;
-    }
   }
 
   function closeMobileReaderPanels({ restoreFocus = false } = {}) {
     if (!isMobileLayout()) return false;
     const hadOpenPanel = !dom.readerNavigator.classList.contains('collapsed') ||
-      !dom.aiPanel.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
-      !dom.searchPanel.hidden ||
-      !dom.ttsPanel.hidden;
+      !dom.searchPanel.hidden;
     closeOtherMobileReaderPanels('');
     setReaderToolsOpen(false);
     syncReaderToolStates();
@@ -1138,10 +1078,6 @@
       closeOtherMobileReaderPanels('navigator');
       if (isMobileLayout()) {
         setReaderToolsOpen(false, { skipChromeSchedule: true });
-      } else if (!dom.aiPanel.classList.contains('collapsed')) {
-        dom.aiPanel.classList.add('collapsed');
-        dom.readerMain.classList.add('ai-collapsed');
-        refreshReaderLayout();
       }
     }
     dom.readerNavigator.classList.toggle('open', shouldOpen);
@@ -1258,7 +1194,6 @@
         <div class="book-card-info">
           <div class="book-card-badges">
             <span class="book-source-badge">${isServer ? '云端书库' : '本机书籍'}</span>
-            <span class="book-ai-badge" data-state="${escapeHTML(book.knowledge_status || 'unregistered')}">${escapeHTML(formatKnowledgeStatus(book.knowledge_status))}</span>
           </div>
           <div class="book-card-title">${escapeHTML(bookTitle)}</div>
           <div class="book-card-author">${escapeHTML(book.book_author || '未知作者')}</div>
@@ -1360,9 +1295,6 @@
           progress_percent: localBook ? localBook.progress_percent : 0,
           last_cfi: localBook ? localBook.last_cfi : '',
           imported_at: localBook ? localBook.imported_at : Date.now(),
-          knowledge_book_id: b.knowledge_book_id || null,
-          knowledge_status: b.knowledge_status || 'unregistered',
-          knowledge_error: b.knowledge_error || '',
           transfer_status: 'synced',
           transfer_progress: 100,
           transfer_error: '',
@@ -1437,10 +1369,11 @@
     pendingBookDelete = book;
     const isServer = book._source === 'server' || book.source === 'server' || book.server_book_id;
     dom.bookDeleteMessage.textContent = isServer
-      ? `要从服务器彻底删除《${book.book_title || '未命名书籍'}》吗？所有设备上的 EPUB、进度、书签、划线、笔记和 AI 数据都会删除。`
-      : `要删除《${book.book_title || '未命名书籍'}》吗？`;
+      ? `要从服务器删除《${book.book_title || '未命名书籍'}》吗？所有设备上的 EPUB、进度、书签、划线和笔记都会删除。`
+      : `要从本机移除《${book.book_title || '未命名书籍'}》及阅读数据吗？`;
     dom.btnDeleteLocalBook.hidden = isServer;
-    dom.btnDeleteAllBookData.textContent = isServer ? '从所有设备删除' : '删除书籍及 AI 数据';
+    dom.btnDeleteAllBookData.hidden = !isServer;
+    dom.btnDeleteAllBookData.textContent = '从所有设备删除';
     dom.btnDeleteAllBookData.disabled = false;
     dom.bookDeleteModal.hidden = false;
     safeFocus(dom.btnCancelBookDelete);
@@ -1448,13 +1381,11 @@
 
   function closeBookDeleteDialog() {
     pendingBookDelete = null;
-    dom.btnDeleteLocalBook.hidden = false;
-    dom.btnDeleteAllBookData.textContent = '删除书籍及 AI 数据';
     dom.bookDeleteModal.hidden = true;
     restoreDialogTrigger();
   }
 
-  async function confirmBookDelete(deleteAiData) {
+  async function confirmBookDelete() {
     const book = pendingBookDelete;
     if (!book) return;
     const serverBookId = book.server_book_id ||
@@ -1467,39 +1398,11 @@
         showToast('服务器书籍删除失败，请稍后重试', 'error');
         return;
       }
-      await deleteBook(book.id);
-      closeBookDeleteDialog();
-      await renderLibrary();
-      showToast('已从所有设备删除书籍及阅读数据', 'success');
-      return;
-    }
-    if (deleteAiData && book.knowledge_book_id) {
-      const resp = await fetch(
-        API_BASE + '/api/knowledge/books/' + encodeURIComponent(book.knowledge_book_id),
-        { method: 'DELETE' }
-      );
-      if (!resp.ok && resp.status !== 404) {
-        showToast('后端 AI 数据删除失败，请稍后重试', 'error');
-        return;
-      }
     }
     await deleteBook(book.id);
     closeBookDeleteDialog();
     await renderLibrary();
-    showToast(deleteAiData ? '书籍及 AI 数据已删除' : '已从本机书库移除', 'info');
-  }
-
-  function formatKnowledgeStatus(status) {
-    const labels = {
-      uploading: 'AI 上传中',
-      pending: 'AI 排队中',
-      indexing: 'AI 索引中',
-      ready: 'AI 已就绪',
-      failed: 'AI 索引失败',
-      outdated: 'AI 待重建',
-      unregistered: 'AI 未索引',
-    };
-    return labels[status] || 'AI 未索引';
+    showToast(serverBookId ? '已从所有设备删除书籍及阅读数据' : '已从本机书库移除', 'info');
   }
 
   function normalizeBookText(value) {
@@ -1681,9 +1584,6 @@
       file_blob: arrayBuffer || localBook.file_blob || (existingTarget && existingTarget.file_blob) || null,
       cached_content_hash: serverBook.content_hash || localBook.cached_content_hash || '',
       cached_at: Date.now(),
-      knowledge_book_id: serverBook.knowledge_book_id || null,
-      knowledge_status: serverBook.knowledge_status || 'unregistered',
-      knowledge_error: serverBook.knowledge_error || '',
       migration_error: '',
       transfer_status: 'synced',
       transfer_progress: 100,
@@ -1727,6 +1627,9 @@
     if (oldId !== serverBook.id) await dbDelete('books', oldId);
     if (currentBookMeta && currentBookMeta.id === oldId) {
       currentBookMeta = merged;
+      if (history.state?.marginaliaView === 'reader' && history.state.bookId === oldId) {
+        writeViewHistory('reader', 'replace', { bookId: serverBook.id });
+      }
     }
     if (operationBookId === oldId) operationBookId = serverBook.id;
     return merged;
@@ -1780,7 +1683,7 @@
       setOperationStatus({
         bookId: book.id,
         message: `正在上传《${book.book_title}》`,
-        detail: '正文已经可以阅读，上传和 AI 索引会在后台继续',
+        detail: '正文已经可以阅读，上传会在后台继续',
         progress: 0,
         autoHideMs: 5000,
       });
@@ -1803,7 +1706,7 @@
                 ? `服务器正在校验《${book.book_title}》`
                 : `正在上传《${book.book_title}》`,
               detail: rounded >= 100
-                ? '文件已发送，正在保存并启动 AI 索引'
+                ? '文件已发送，正在保存到服务器'
                 : '正文已经可以阅读，上传在后台继续',
               progress: rounded,
               autoHideMs: statusTimeRemaining,
@@ -1818,15 +1721,13 @@
 
       const merged = await rekeyBookToServer(book, serverBook, arrayBuffer);
       await renderLibrary();
-      const indexLabel = formatKnowledgeStatus(merged.knowledge_status);
       setOperationStatus({
         bookId: merged.id,
         message: `《${merged.book_title}》已保存到服务器`,
-        detail: indexLabel,
+        detail: '其他设备现在可以打开这本书',
         progress: 100,
-        autoHideMs: merged.knowledge_status === 'ready' ? 3500 : 6000,
+        autoHideMs: 3500,
       });
-      if (merged.knowledge_book_id) pollKnowledgeStatus(merged);
       if (announce) showToast('服务器保存完成，其他设备现在可以看到这本书', 'success');
       return merged;
     } catch (err) {
@@ -1933,8 +1834,6 @@
         localRecord.transfer_status = 'local_ready';
         localRecord.transfer_progress = 0;
         localRecord.transfer_error = '';
-        localRecord.knowledge_status = localRecord.knowledge_status || 'unregistered';
-        localRecord.knowledge_error = '';
         try {
           await dbPut('books', localRecord);
         } catch (err) {
@@ -1982,8 +1881,12 @@
       const finish = () => {
         if (settled) return;
         settled = true;
-        if (url) URL.revokeObjectURL(url);
-        if (book && typeof book.destroy === 'function') book.destroy();
+        const cleanup = () => {
+          if (url) URL.revokeObjectURL(url);
+          if (book && typeof book.destroy === 'function') book.destroy();
+        };
+        if (book && book.ready) book.ready.then(cleanup, cleanup);
+        else cleanup();
         resolve(meta);
       };
       try {
@@ -2001,180 +1904,6 @@
         finish();
       }
     });
-  }
-
-  async function recoverMissingKnowledgeBook(book, { promptForFile = false } = {}) {
-    if (!book) return;
-    if (aiIndexPollTimer) {
-      clearTimeout(aiIndexPollTimer);
-      aiIndexPollTimer = null;
-    }
-
-    book.knowledge_book_id = null;
-    if (book.file_blob) {
-      book.knowledge_status = 'unregistered';
-      book.knowledge_error = '';
-    } else {
-      book.knowledge_status = 'failed';
-      book.knowledge_error = '源文件已不在服务器，请重新导入原 EPUB';
-    }
-    await dbPut('books', book);
-
-    if (currentBookMeta && currentBookMeta.id === book.id) {
-      currentBookMeta = book;
-      setAiIndexState(book.knowledge_status, book.knowledge_error);
-    }
-    await renderLibrary();
-
-    if (book.file_blob) {
-      await ensureKnowledgeBook(book);
-    } else if (promptForFile) {
-      showToast('请选择原 EPUB，阅读进度和笔记会保留', 'info');
-      dom.fileInput.click();
-    }
-  }
-
-  async function ensureKnowledgeBook(book) {
-    if (!book || book.knowledge_status === 'ready' || book.knowledge_status === 'indexing' || book.knowledge_status === 'pending') {
-      if (book && book.knowledge_book_id) pollKnowledgeStatus(book);
-      return;
-    }
-    if (knowledgeUploadsInFlight.has(book.id)) return;
-    knowledgeUploadsInFlight.add(book.id);
-    book.knowledge_status = 'uploading';
-    book.knowledge_error = '';
-    await dbPut('books', book);
-    if (currentBookMeta && currentBookMeta.id === book.id) {
-      setAiIndexState('uploading');
-    }
-    try {
-      const uploadBytes = () => {
-        const form = new FormData();
-        form.append(
-          'file',
-          new Blob([book.file_blob], { type: 'application/epub+zip' }),
-          `${book.book_title || 'book'}.epub`
-        );
-        form.append('title', book.book_title || '');
-        form.append('author', book.book_author || '');
-        return fetch(API_BASE + '/api/knowledge/books/upload', {
-          method: 'POST',
-          body: form,
-        });
-      };
-
-      let resp;
-      if (book.filename) {
-        // The EPUB already lives on the server; register it for AI without
-        // re-uploading the bytes. Fall back to a full upload if the server
-        // lost the file but this device still has it.
-        resp = await fetch(API_BASE + '/api/knowledge/books/from-server', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename: book.filename }),
-        });
-        if (resp.status === 404 && book.file_blob) {
-          resp = await uploadBytes();
-        }
-      } else {
-        resp = await uploadBytes();
-      }
-      if (!resp.ok) {
-        const error = await resp.json().catch(() => ({}));
-        const detail = error.detail && (error.detail.message || error.detail);
-        const requestError = new Error(
-          typeof detail === 'string' ? detail : `Server responded with ${resp.status}`
-        );
-        requestError.status = resp.status;
-        requestError.code = error.detail && error.detail.code;
-        throw requestError;
-      }
-      const indexedBook = await resp.json();
-      book.knowledge_book_id = indexedBook.id;
-      book.knowledge_status = indexedBook.status;
-      book.knowledge_error = indexedBook.error_message || '';
-      await dbPut('books', book);
-      if (currentBookMeta && currentBookMeta.id === book.id) {
-        currentBookMeta = book;
-        setAiIndexState(book.knowledge_status, book.knowledge_error);
-      }
-      pollKnowledgeStatus(book);
-      renderLibrary();
-    } catch (err) {
-      console.error('Knowledge book upload failed:', err);
-      if (err.status === 404 || err.code === 'book_not_found') {
-        await recoverMissingKnowledgeBook(book);
-        return;
-      }
-      book.knowledge_status = 'failed';
-      book.knowledge_error = err.message;
-      await dbPut('books', book);
-      if (currentBookMeta && currentBookMeta.id === book.id) {
-        setAiIndexState('failed', err.message);
-      }
-    } finally {
-      knowledgeUploadsInFlight.delete(book.id);
-    }
-  }
-
-  function pollKnowledgeStatus(book) {
-    if (!book || !book.knowledge_book_id) return;
-    if (aiIndexPollTimer) clearTimeout(aiIndexPollTimer);
-    const poll = async () => {
-      try {
-        const resp = await fetch(
-          API_BASE + '/api/knowledge/books/' + encodeURIComponent(book.knowledge_book_id)
-        );
-        if (resp.status === 404) {
-          await recoverMissingKnowledgeBook(book);
-          return;
-        }
-        if (!resp.ok) throw new Error(`Server responded with ${resp.status}`);
-        const data = await resp.json();
-        book.knowledge_status = data.status;
-        book.knowledge_error = data.error_message || '';
-        await dbPut('books', book);
-        if (operationBookId === book.id) {
-          if (data.status === 'pending' || data.status === 'indexing') {
-            setOperationStatus({
-              bookId: book.id,
-              message: `《${book.book_title}》已保存到服务器`,
-              detail: formatKnowledgeStatus(data.status),
-            });
-          } else if (data.status === 'ready') {
-            setOperationStatus({
-              bookId: book.id,
-              message: `《${book.book_title}》已全部就绪`,
-              detail: '服务器保存和 AI 索引均已完成',
-              progress: 100,
-              autoHideMs: 4000,
-            });
-          } else if (data.status === 'failed') {
-            setOperationStatus({
-              bookId: book.id,
-              message: `《${book.book_title}》已保存，但 AI 索引失败`,
-              detail: data.error_message || '可以继续阅读，并稍后重试索引',
-              tone: 'warning',
-            });
-          }
-        }
-        if (currentBookMeta && currentBookMeta.id === book.id) {
-          currentBookMeta = book;
-          setAiIndexState(data.status, data.error_message || '');
-          if (data.status === 'ready') await loadAiConversations();
-        }
-        if (data.status === 'pending' || data.status === 'indexing') {
-          aiIndexPollTimer = setTimeout(poll, 2000);
-        } else {
-          renderLibrary();
-        }
-      } catch (err) {
-        if (currentBookMeta && currentBookMeta.id === book.id) {
-          setAiIndexState('failed', '无法读取索引状态');
-        }
-      }
-    };
-    poll();
   }
 
   // ==================== READER ====================
@@ -2280,15 +2009,7 @@
       }
     }
     currentBookMeta = bookMeta;
-    aiMessages = [];
-    aiConversations = [];
-    currentAiConversationId = null;
-    renderAiMessages();
-    renderAiConversationOptions();
-    setAiIndexState(bookMeta.knowledge_status || 'unregistered', bookMeta.knowledge_error || '');
-    if (isServerBook || (bookMeta.filename && !bookMeta.file_blob)) {
-      ensureKnowledgeBook(bookMeta);
-    }
+    updateProgressUI();
 
     // Keep the book title as a readiness signal: it is set after the first
     // display and location sync complete.
@@ -2358,14 +2079,6 @@
 
       rendition.on('rendered', () => {
         setupIframeNavigation();
-        ttsFollowDocumentCache = null;
-        if (isTtsNavigationLocked() && !ttsFollowNavigationInProgress) {
-          window.setTimeout(() => updateTtsFollowHighlight({
-            force: true,
-            source: 'render',
-            navigation: 'none',
-          }), 0);
-        }
       });
 
       // Setup highlight selection handling
@@ -2429,53 +2142,61 @@
     return null;
   }
 
+  function persistReaderProgress(cfi, percent, { force = false } = {}) {
+    if (!currentBookMeta || !cfi || (isLayoutRefreshing && !force)) return Promise.resolve(false);
+    const transferredProgress = Number(currentBookMeta.transfer_preserved_progress || 0);
+    if (percent == null) {
+      if (transferredProgress > 0) return Promise.resolve(false);
+      currentCfi = cfi;
+      currentBookMeta.last_cfi = cfi;
+      pendingProgressCfi = cfi;
+      return dbPut('books', currentBookMeta).then(() => false);
+    }
+
+    const pct = Math.round(Math.max(0, Math.min(1, percent)) * 100);
+    const isProvisionalDowngrade = pct < transferredProgress;
+    if (isProvisionalDowngrade) return Promise.resolve(false);
+    currentCfi = cfi;
+    currentBookMeta.last_cfi = cfi;
+
+    delete currentBookMeta.transfer_preserved_progress;
+    delete currentBookMeta.transfer_preserved_cfi;
+    pendingProgressCfi = '';
+    currentBookMeta.progress_percent = pct;
+    updateProgressUI();
+    const progressKey = `${currentBookMeta.id}:${cfi}:${pct}`;
+    const shouldQueue = progressKey !== lastPersistedProgressKey &&
+      (currentBookMeta.server_book_id || currentBookMeta.source === 'server');
+    lastPersistedProgressKey = progressKey;
+    return dbPut('books', currentBookMeta).then(async () => {
+      if (shouldQueue) {
+        await queueReaderSync(currentBookMeta.id, 'progress.set', '', {
+          cfi,
+          progress_percent: pct,
+          last_opened: currentBookMeta.last_opened || Date.now(),
+        });
+      }
+      return true;
+    });
+  }
+
   function handleLocationChange(location) {
     if (!location || !location.start) return;
     currentCfi = location.start.cfi;
     const nextChapterId = String(location.start.href || '').split('#', 1)[0];
-    if (currentChapterId && nextChapterId && currentChapterId !== nextChapterId) {
-      stopTtsForChapter({ resetTask: true });
-    }
     if (nextChapterId) currentChapterId = nextChapterId;
     updateChapterLabel(location);
     updateTocActiveState(location.start.href || '');
-    let percent = location.start.percentage;
-    if (percent == null) {
-      percent = percentageFromCfi(currentCfi);
-    }
-    if (percent == null) return;
-    const pct = Math.round(percent * 100);
-
-    // Update progress UI
-    dom.progressText.textContent = pct + '%';
-    updatePageUI();
-
-    // Save progress to DB
-    if (currentBookMeta && !isLayoutRefreshing) {
-      const locations = currentRendition && currentRendition.book
-        ? currentRendition.book.locations
-        : null;
-      const hasStableBookPercentage = getLocationCount(locations) > 0;
-      const storedProgress = Number(currentBookMeta.progress_percent || 0);
-      const transferredProgress = Number(currentBookMeta.transfer_preserved_progress || 0);
-      const protectedProgress = Math.max(storedProgress, transferredProgress);
-      const isProvisionalDowngrade =
-        pct < transferredProgress || (!hasStableBookPercentage && pct < protectedProgress);
-      if (!isProvisionalDowngrade) {
-        delete currentBookMeta.transfer_preserved_progress;
-        delete currentBookMeta.transfer_preserved_cfi;
-        currentBookMeta.progress_percent = pct;
-        currentBookMeta.last_cfi = currentCfi;
-        dbPut('books', currentBookMeta).catch(() => {});
-        if (currentBookMeta.server_book_id || currentBookMeta.source === 'server') {
-          queueReaderSync(currentBookMeta.id, 'progress.set', '', {
-            cfi: currentCfi,
-            progress_percent: pct,
-            last_opened: currentBookMeta.last_opened || Date.now(),
-          }).catch(() => {});
-        }
-      }
-    }
+    const locations = currentRendition && currentRendition.book
+      ? currentRendition.book.locations
+      : null;
+    const hasStableBookPercentage = getLocationCount(locations) > 0;
+    let percent = hasStableBookPercentage ? percentageFromCfi(currentCfi) : null;
+    if (percent == null && hasStableBookPercentage) percent = location.start.percentage;
+    persistReaderProgress(currentCfi, percent).catch((err) => {
+      console.warn('Reader progress could not be saved:', err);
+    });
+    updateProgressUI();
   }
 
   function releaseTransferredProgressFloor() {
@@ -2516,14 +2237,8 @@
   }
 
   function updateProgressUI() {
-    if (!currentRendition || !currentRendition.location || !currentRendition.location.start) return;
-    let percent = currentRendition.location.start.percentage;
-    if (percent == null) {
-      percent = percentageFromCfi(currentRendition.location.start.cfi);
-    }
-    if (percent == null) return;
-    const pct = Math.round(percent * 100);
-    dom.progressText.textContent = pct + '%';
+    const percent = Number(currentBookMeta && currentBookMeta.progress_percent) || 0;
+    dom.progressText.textContent = Math.round(Math.max(0, Math.min(100, percent))) + '%';
     updatePageUI();
   }
 
@@ -2664,32 +2379,6 @@
       || tagName === 'select';
   }
 
-  function isTtsNavigationLocked() {
-    return Boolean(ttsWantsPlay || ttsIsPlaying || ttsPlaybackStarting);
-  }
-
-  function showTtsNavigationLockedNotice() {
-    const now = Date.now();
-    if (now - ttsNavigationNoticeAt < 1200) return;
-    ttsNavigationNoticeAt = now;
-    showToast('朗读跟随中，请先暂停再翻页', 'info');
-  }
-
-  function syncReaderNavigationControls() {
-    const locked = isTtsNavigationLocked();
-    if (dom.readerView) {
-      dom.readerView.classList.toggle('tts-navigation-locked', locked);
-      dom.readerView.setAttribute('aria-busy', String(locked));
-    }
-  }
-
-  function blockManualNavigationDuringTts() {
-    if (!isTtsNavigationLocked()) return false;
-    showTtsNavigationLockedNotice();
-    syncReaderNavigationControls();
-    return true;
-  }
-
   function navigatePageWhenReady(direction, source, attempt = 0) {
     if (isLayoutRefreshing && attempt < 10) {
       return new Promise(resolve => {
@@ -2702,7 +2391,6 @@
   }
 
   function navigatePage(direction, source) {
-    if (blockManualNavigationDuringTts()) return Promise.resolve(false);
     if (!currentRendition || pageNavigationInProgress || isLayoutRefreshing) return Promise.resolve(false);
     if (direction !== 'next' && direction !== 'prev') return Promise.resolve(false);
 
@@ -2787,17 +2475,24 @@
     if (locationsReadyBook === book && locationsReadyPromise) return locationsReadyPromise;
     if (getLocationCount(book.locations) > 0) {
       locationsReadyBook = book;
-      locationsReadyPromise = Promise.resolve();
-      syncReaderNavigationControls();
-      updatePageUI();
+      locationsReadyPromise = Promise.resolve().then(() => {
+        updatePageUI();
+        const cfi = pendingProgressCfi || getCurrentAnchorCfi();
+        const percent = percentageFromCfi(cfi);
+        if (cfi && percent != null) return persistReaderProgress(cfi, percent);
+        return false;
+      });
       return locationsReadyPromise;
     }
 
     locationsReadyBook = book;
     locationsReadyPromise = book.locations.generate(1000)
       .then(() => {
-        syncReaderNavigationControls();
         updatePageUI();
+        const cfi = pendingProgressCfi || getCurrentAnchorCfi();
+        const percent = percentageFromCfi(cfi);
+        if (cfi && percent != null) return persistReaderProgress(cfi, percent);
+        return false;
       })
       .catch((err) => {
         locationsReadyBook = null;
@@ -3652,607 +3347,6 @@
       });
   }
 
-  // ==================== AUTOMATIC NARRATION ====================
-  function ttsErrorMessage(payload, fallback = '自动朗读暂时不可用') {
-    const detail = payload && payload.detail;
-    if (detail && typeof detail.message === 'string') return detail.message;
-    if (typeof detail === 'string') return detail;
-    return fallback;
-  }
-
-  function setTtsStatus(message, state = '') {
-    dom.ttsStatus.textContent = message;
-    dom.ttsStatus.dataset.state = state;
-    syncReaderNavigationControls();
-  }
-
-  function formatAudioTime(seconds) {
-    if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
-    const rounded = Math.floor(seconds);
-    return `${String(Math.floor(rounded / 60)).padStart(2, '0')}:${String(rounded % 60).padStart(2, '0')}`;
-  }
-
-  function compactTtsText(value) {
-    return String(value || '')
-      .replace(/[\u00a0\u3000]/g, ' ')
-      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
-      .replace(/\s+/g, '');
-  }
-
-  function isTtsContentElementVisible(element) {
-    if (!element || element.hidden || element.getAttribute('aria-hidden') === 'true') return false;
-    if (element.closest('script, style, noscript, nav, form, button, input, select, textarea, svg, canvas, iframe, audio, video, footer')) return false;
-    const attrs = ['id', 'class', 'role'].map(name => element.getAttribute(name) || '').join(' ');
-    if (/(^|[-_\s])(nav|menu|toolbar|breadcrumb|pagination|controls?|buttons?)([-_\s]|$)/i.test(attrs)) return false;
-    const style = String(element.getAttribute('style') || '').replace(/\s/g, '').toLowerCase();
-    return !style.includes('display:none') && !style.includes('visibility:hidden');
-  }
-
-  function buildTtsDocumentIndex(doc) {
-    if (!doc || !doc.body) return null;
-    const blocks = Array.from(doc.body.querySelectorAll(TTS_CONTENT_BLOCK_SELECTOR)).filter(element => {
-      const parentBlock = element.parentElement && element.parentElement.closest(TTS_CONTENT_BLOCK_SELECTOR);
-      return !parentBlock && isTtsContentElementVisible(element);
-    });
-    const roots = blocks.length ? blocks : [doc.body];
-    const characters = [];
-    const points = [];
-    const nodeFilter = doc.defaultView && doc.defaultView.NodeFilter
-      ? doc.defaultView.NodeFilter
-      : NodeFilter;
-
-    for (const root of roots) {
-      const walker = doc.createTreeWalker(root, nodeFilter.SHOW_TEXT);
-      let textNode;
-      while ((textNode = walker.nextNode())) {
-        const parent = textNode.parentElement;
-        if (!parent || !isTtsContentElementVisible(parent)) continue;
-        const value = String(textNode.nodeValue || '');
-        for (let offset = 0; offset < value.length; offset += 1) {
-          const character = value[offset].replace(/[\u00a0\u3000]/g, ' ');
-          if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\s]/.test(character)) continue;
-          characters.push(character);
-          points.push({ node: textNode, offset });
-        }
-      }
-    }
-    return { doc, text: characters.join(''), points };
-  }
-
-  function getTtsFollowCache() {
-    const iframe = findReaderIframes()[0];
-    const doc = iframe && iframe.contentDocument;
-    if (!doc || !ttsTask) return null;
-    if (
-      ttsFollowDocumentCache &&
-      ttsFollowDocumentCache.doc === doc &&
-      ttsFollowDocumentCache.taskId === ttsTask.taskId
-    ) return ttsFollowDocumentCache;
-
-    const documentIndex = buildTtsDocumentIndex(doc);
-    if (!documentIndex) return null;
-    const mappings = new Map();
-    let cursor = 0;
-    const segments = [...(ttsTask.segments || [])].sort((a, b) => Number(a.index) - Number(b.index));
-    for (const segment of segments) {
-      const compact = compactTtsText(segment.text);
-      if (!compact) continue;
-      let start = documentIndex.text.indexOf(compact, cursor);
-      if (start < 0) start = documentIndex.text.indexOf(compact);
-      if (start < 0) continue;
-      mappings.set(Number(segment.index), { start, end: start + compact.length, segment });
-      cursor = start + compact.length;
-    }
-    ttsFollowDocumentCache = {
-      doc,
-      taskId: ttsTask.taskId,
-      documentIndex,
-      mappings,
-    };
-    return ttsFollowDocumentCache;
-  }
-
-  function ttsRangeForCue(segment, cue) {
-    const cache = getTtsFollowCache();
-    const mapping = cache && cache.mappings.get(Number(segment.index));
-    if (!cache || !mapping) return null;
-    const cueStart = cue ? compactTtsText(segment.text.slice(0, Number(cue.start) || 0)).length : 0;
-    const cueEnd = cue
-      ? compactTtsText(segment.text.slice(0, Number(cue.end) || 0)).length
-      : mapping.end - mapping.start;
-    const startIndex = mapping.start + cueStart;
-    const endIndex = Math.max(startIndex + 1, mapping.start + cueEnd);
-    const startPoint = cache.documentIndex.points[startIndex];
-    const endPoint = cache.documentIndex.points[endIndex - 1];
-    if (!startPoint || !endPoint) return null;
-    try {
-      const range = cache.doc.createRange();
-      range.setStart(startPoint.node, startPoint.offset);
-      range.setEnd(endPoint.node, endPoint.offset + 1);
-      return range;
-    } catch (_err) {
-      return null;
-    }
-  }
-
-  function removeTtsFollowAnnotations(cfi) {
-    if (!cfi || !currentRendition || !currentRendition.annotations) return;
-    try { currentRendition.annotations.remove(cfi, 'highlight'); } catch (_err) {}
-    try { currentRendition.annotations.remove(cfi, 'underline'); } catch (_err) {}
-  }
-
-  function cancelPendingTtsFollowNavigation() {
-    if (!ttsFollowPendingNavigation) return;
-    ttsFollowPendingNavigation.resolve(false);
-    ttsFollowPendingNavigation = null;
-  }
-
-  function pauseTtsFollowNavigation() {
-    ttsFollowUpdateToken += 1;
-    cancelPendingTtsFollowNavigation();
-  }
-
-  function clearTtsFollowHighlight({ restorePersistent = false } = {}) {
-    pauseTtsFollowNavigation();
-    removeTtsFollowAnnotations(ttsFollowCfi);
-    ttsFollowCfi = '';
-    ttsFollowCueKey = '';
-    for (const iframe of findReaderIframes()) {
-      try {
-        iframe.contentDocument.documentElement.classList.remove('tts-follow-active');
-        delete iframe.contentDocument.documentElement.dataset.ttsFollowText;
-        delete iframe.contentDocument.documentElement.dataset.ttsFollowSource;
-      } catch (_err) { /* ignore inaccessible frames */ }
-    }
-    if (restorePersistent) restoreHighlights();
-  }
-
-  function isRangeVisibleInReader(range) {
-    if (!range) return false;
-    const doc = range.commonAncestorContainer.ownerDocument;
-    const iframe = getIframeForDocument(doc);
-    if (!iframe || !dom.epubContainer) return false;
-    const frameRect = iframe.getBoundingClientRect();
-    const hostRect = dom.epubContainer.getBoundingClientRect();
-    return Array.from(range.getClientRects()).some(rect => {
-      const left = frameRect.left + rect.left;
-      const right = frameRect.left + rect.right;
-      const top = frameRect.top + rect.top;
-      const bottom = frameRect.top + rect.bottom;
-      return right > hostRect.left && left < hostRect.right && bottom > hostRect.top && top < hostRect.bottom;
-    });
-  }
-
-  async function drainTtsFollowNavigationQueue() {
-    ttsFollowNavigationInProgress = true;
-    try {
-      while (ttsFollowPendingNavigation) {
-        const request = ttsFollowPendingNavigation;
-        ttsFollowPendingNavigation = null;
-        let displayed = false;
-        try {
-          if (request.updateToken !== ttsFollowUpdateToken || !isTtsNavigationLocked()) {
-            request.resolve(false);
-            continue;
-          }
-          await currentRendition.display(request.cfi);
-          displayed = true;
-        } catch (err) {
-          console.warn('TTS follow navigation failed:', err);
-        }
-        const isLatest = !ttsFollowPendingNavigation &&
-          request.updateToken === ttsFollowUpdateToken &&
-          isTtsNavigationLocked();
-        request.resolve(displayed && isLatest);
-      }
-    } finally {
-      ttsFollowNavigationInProgress = false;
-      ttsFollowNavigationWorker = null;
-      if (ttsFollowPendingNavigation) {
-        ttsFollowNavigationWorker = drainTtsFollowNavigationQueue();
-      }
-    }
-  }
-
-  function queueTtsFollowNavigation(cfi, updateToken) {
-    return new Promise((resolve) => {
-      if (ttsFollowPendingNavigation) {
-        ttsFollowPendingNavigation.resolve(false);
-      }
-      ttsFollowPendingNavigation = { cfi, updateToken, resolve };
-      if (!ttsFollowNavigationWorker) {
-        ttsFollowNavigationWorker = drainTtsFollowNavigationQueue();
-      }
-    });
-  }
-
-  async function updateTtsFollowHighlight({
-    force = false,
-    source = 'timeline',
-    navigation = 'if-needed',
-  } = {}) {
-    const segment = readyTtsSegment(ttsSegmentIndex);
-    if (!segment || !currentRendition || ttsChapterId !== currentChapterId) return;
-    const cues = Array.isArray(segment.cues) ? segment.cues : [];
-    const currentMs = Math.max(0, Number(dom.ttsAudio.currentTime || 0) * 1000);
-    let cueIndex = -1;
-    for (let index = 0; index < cues.length; index += 1) {
-      if (Number(cues[index].startMs || 0) <= currentMs + 20) cueIndex = index;
-      else break;
-    }
-    if (cues.length && cueIndex < 0) cueIndex = 0;
-    const cue = cueIndex >= 0 ? cues[cueIndex] : null;
-    const cueKey = `${ttsTask.taskId}:${ttsSegmentIndex}:${cueIndex}`;
-    if (!force && cueKey === ttsFollowCueKey) return;
-
-    const range = ttsRangeForCue(segment, cue) || ttsRangeForCue(segment, null);
-    if (!range) return;
-    const cfi = cfiFromIframeRange(range);
-    if (!cfi) return;
-    const updateToken = ++ttsFollowUpdateToken;
-    const previousFollowCfi = ttsFollowCfi;
-    ttsFollowCueKey = cueKey;
-
-    const navigationLocked = isTtsNavigationLocked();
-    const mustNavigate = navigation === 'force' && navigationLocked;
-    const shouldNavigate = navigation === 'if-needed' && navigationLocked && !isRangeVisibleInReader(range);
-    if (mustNavigate || shouldNavigate) {
-      const followedLatestPosition = await queueTtsFollowNavigation(cfi, updateToken);
-      if (!followedLatestPosition) return;
-    }
-    if (updateToken !== ttsFollowUpdateToken || !currentRendition || !currentRendition.annotations) return;
-    removeTtsFollowAnnotations(previousFollowCfi);
-    ttsFollowCfi = cfi;
-    const activeRange = ttsRangeForCue(segment, cue) || range;
-    try {
-      currentRendition.annotations.highlight(
-        cfi,
-        { ttsFollow: true, source },
-        null,
-        TTS_FOLLOW_CLASS,
-        {
-          fill: 'rgb(224, 128, 43)',
-          'fill-opacity': '0.24',
-          stroke: 'rgb(183, 91, 23)',
-          'stroke-opacity': '0.28',
-        }
-      );
-      if (typeof currentRendition.annotations.underline === 'function') {
-        currentRendition.annotations.underline(
-          cfi,
-          { ttsFollow: true, source },
-          null,
-          TTS_FOLLOW_UNDERLINE_CLASS,
-          {
-            stroke: 'rgb(171, 82, 19)',
-            'stroke-opacity': '0.96',
-            'stroke-width': '2.4',
-          }
-        );
-      }
-      const doc = activeRange.commonAncestorContainer.ownerDocument;
-      doc.documentElement.classList.add('tts-follow-active');
-      doc.documentElement.dataset.ttsFollowText = cue ? cue.text : segment.text;
-      doc.documentElement.dataset.ttsFollowSource = source;
-    } catch (err) {
-      console.warn('TTS follow highlight failed:', err);
-    }
-  }
-
-  function getSavedTtsPosition() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(TTS_POSITION_KEY) || 'null');
-      return parsed && typeof parsed === 'object' ? parsed : null;
-    } catch (_err) {
-      return null;
-    }
-  }
-
-  function saveTtsPosition(force = false) {
-    if (!currentBookMeta || !ttsChapterId || !ttsTask) return;
-    const now = Date.now();
-    if (!force && now - ttsLastSavedAt < 1000) return;
-    ttsLastSavedAt = now;
-    try {
-      localStorage.setItem(TTS_POSITION_KEY, JSON.stringify({
-        book_id: currentBookMeta.id,
-        chapter_id: ttsChapterId,
-        segment_index: ttsSegmentIndex,
-        current_time: Number(dom.ttsAudio.currentTime || 0),
-        voice: dom.ttsVoice.value,
-        rate: Number(dom.ttsRate.value),
-      }));
-    } catch (_err) {
-      // Playback continues if localStorage is unavailable.
-    }
-  }
-
-  function clearTtsPoll() {
-    if (ttsPollTimer) clearTimeout(ttsPollTimer);
-    ttsPollTimer = null;
-  }
-
-  function stopTtsForChapter({ resetTask = false } = {}) {
-    clearTtsPoll();
-    saveTtsPosition(true);
-    ttsWantsPlay = false;
-    ttsIsPlaying = false;
-    ttsPlaybackStarting = false;
-    clearTtsFollowHighlight({ restorePersistent: true });
-    ttsFollowDocumentCache = null;
-    dom.ttsAudio.pause();
-    dom.ttsAudio.removeAttribute('src');
-    dom.ttsAudio.dataset.segmentIndex = '';
-    dom.ttsAudio.load();
-    dom.ttsProgress.value = '0';
-    dom.ttsProgress.disabled = true;
-    dom.ttsTime.textContent = '00:00 / 00:00';
-    if (resetTask) {
-      ttsTask = null;
-      ttsChapterId = '';
-      ttsSegmentIndex = 0;
-      dom.ttsSegmentLabel.textContent = '第 0 / 0 段';
-      dom.btnTtsPlay.disabled = true;
-      dom.btnTtsPause.disabled = true;
-      dom.btnTtsPrev.disabled = true;
-      dom.btnTtsNext.disabled = true;
-      setTtsStatus('选择声音后朗读当前章节');
-    }
-    syncReaderNavigationControls();
-  }
-
-  function setTtsPanelOpen(open) {
-    if (open) {
-      setReaderChromeVisible(true);
-      cancelReaderChromeHide();
-      closeOtherMobileReaderPanels('tts');
-      setReaderToolsOpen(false, { skipChromeSchedule: true });
-      ttsRestoredPosition = getSavedTtsPosition();
-    }
-    dom.ttsPanel.hidden = !open;
-    syncReaderToolStates();
-    syncReaderPanelBackdrop();
-    if (!open) scheduleReaderChromeHide();
-  }
-
-  function toggleTtsPanel() {
-    setTtsPanelOpen(dom.ttsPanel.hidden);
-  }
-
-  async function loadTtsVoices() {
-    try {
-      const response = await fetchWithTimeout(API_BASE + '/api/tts/voices');
-      if (!response.ok) throw new Error(`Server responded with ${response.status}`);
-      const data = await response.json();
-      if (!data.enabled) {
-        dom.btnToggleTts.disabled = true;
-        setTtsStatus('自动朗读功能已关闭', 'failed');
-        return;
-      }
-      const saved = getSavedTtsPosition();
-      dom.ttsVoice.innerHTML = (data.voices || []).map(voice => (
-        `<option value="${escapeHTML(voice.id)}">${escapeHTML(voice.name)}</option>`
-      )).join('');
-      const preferred = saved && (data.voices || []).some(voice => voice.id === saved.voice)
-        ? saved.voice
-        : data.defaultVoice;
-      if (preferred) dom.ttsVoice.value = preferred;
-      if (saved && [0.75, 1, 1.25, 1.5, 2].includes(Number(saved.rate))) {
-        dom.ttsRate.value = String(Number(saved.rate));
-      }
-    } catch (err) {
-      console.warn('Failed to load TTS voices:', err);
-      setTtsStatus('无法读取朗读声音列表', 'failed');
-    }
-  }
-
-  async function startChapterTts({ autoplay = true } = {}) {
-    if (!currentBookMeta || !currentChapterId) {
-      showToast('当前章节尚未加载完成', 'info');
-      return;
-    }
-    const bookId = currentBookMeta.server_book_id || (
-      currentBookMeta.source === 'server' || currentBookMeta._source === 'server'
-        ? currentBookMeta.id
-        : null
-    );
-    if (!bookId) {
-      showToast('请等待书籍上传服务器后再使用朗读', 'warning');
-      return;
-    }
-
-    stopTtsForChapter({ resetTask: true });
-    ttsChapterId = currentChapterId;
-    ttsWantsPlay = autoplay;
-    dom.btnTtsStart.disabled = true;
-    setTtsStatus('正在清理正文并生成第一段…', 'generating');
-    try {
-      const response = await fetchWithTimeout(
-        API_BASE + '/api/books/' + encodeURIComponent(bookId) + '/chapters/' +
-          encodeURIComponent(ttsChapterId) + '/tts',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            voice: dom.ttsVoice.value,
-            rate: Number(dom.ttsRate.value),
-          }),
-        },
-        30000
-      );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(ttsErrorMessage(payload));
-      if (ttsChapterId !== currentChapterId) return;
-      ttsTask = payload;
-      ttsFollowDocumentCache = null;
-      const saved = ttsRestoredPosition || getSavedTtsPosition();
-      const canRestore = saved &&
-        saved.book_id === currentBookMeta.id &&
-        saved.chapter_id === ttsChapterId &&
-        saved.voice === dom.ttsVoice.value &&
-        Number(saved.rate) === Number(dom.ttsRate.value);
-      ttsSegmentIndex = canRestore
-        ? Math.max(0, Math.min(Number(saved.segment_index) || 0, payload.segmentCount - 1))
-        : 0;
-      ttsRestoredPosition = canRestore ? saved : null;
-      applyTtsTask(payload);
-    } catch (err) {
-      console.error('TTS task creation failed:', err);
-      ttsWantsPlay = false;
-      ttsIsPlaying = false;
-      ttsPlaybackStarting = false;
-      clearTtsFollowHighlight({ restorePersistent: true });
-      setTtsStatus(err.message || '朗读任务创建失败', 'failed');
-      showToast(err.message || '朗读任务创建失败', 'error');
-    } finally {
-      dom.btnTtsStart.disabled = false;
-    }
-  }
-
-  function readyTtsSegment(index) {
-    return ttsTask && (ttsTask.segments || []).find(segment => Number(segment.index) === index);
-  }
-
-  function scheduleTtsPoll() {
-    clearTtsPoll();
-    if (!ttsTask || ttsTask.status === 'failed') return;
-    if (ttsTask.status === 'completed' && !ttsWantsPlay) return;
-    const taskId = ttsTask.taskId;
-    ttsPollTimer = setTimeout(() => pollTtsTask(taskId), TTS_POLL_INTERVAL_MS);
-  }
-
-  async function pollTtsTask(taskId) {
-    ttsPollTimer = null;
-    if (!ttsTask || ttsTask.taskId !== taskId) return;
-    try {
-      const response = await fetchWithTimeout(
-        API_BASE + '/api/tts/tasks/' + encodeURIComponent(taskId), {}, 10000
-      );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(ttsErrorMessage(payload, '无法读取朗读生成状态'));
-      if (!ttsTask || ttsTask.taskId !== taskId || ttsChapterId !== currentChapterId) return;
-      ttsTask = payload;
-      ttsFollowDocumentCache = null;
-      applyTtsTask(payload);
-    } catch (err) {
-      ttsWantsPlay = false;
-      ttsIsPlaying = false;
-      ttsPlaybackStarting = false;
-      dom.ttsAudio.pause();
-      clearTtsFollowHighlight({ restorePersistent: true });
-      setTtsStatus(err.message || '朗读状态查询失败', 'failed');
-    }
-  }
-
-  function applyTtsTask(task) {
-    const total = Number(task.segmentCount || 0);
-    const completed = Number(task.completedSegments || 0);
-    dom.ttsSegmentLabel.textContent = total
-      ? `第 ${Math.min(ttsSegmentIndex + 1, total)} / ${total} 段`
-      : '第 0 / 0 段';
-    dom.btnTtsPrev.disabled = !total || ttsSegmentIndex <= 0;
-    dom.btnTtsNext.disabled = !total || ttsSegmentIndex >= total - 1;
-    dom.btnTtsPlay.disabled = !total;
-    dom.btnTtsPause.disabled = !total;
-
-    if (task.status === 'failed') {
-      ttsWantsPlay = false;
-      ttsIsPlaying = false;
-      ttsPlaybackStarting = false;
-      dom.ttsAudio.pause();
-      clearTtsFollowHighlight({ restorePersistent: true });
-      setTtsStatus(task.error || '语音生成失败，请重试', 'failed');
-      return;
-    }
-    const segment = readyTtsSegment(ttsSegmentIndex);
-    if (ttsWantsPlay && segment) {
-      playTtsSegment(ttsSegmentIndex, true);
-    } else if (ttsWantsPlay) {
-      setTtsStatus(`第 ${ttsSegmentIndex + 1} 段生成中，跟随定位与翻页锁定已开启…`, 'generating');
-    } else if (ttsIsPlaying) {
-      setTtsStatus(
-        task.status === 'completed'
-          ? `正在播放第 ${ttsSegmentIndex + 1} 段 · 跟随原文，暂停后可翻页`
-          : `正在播放第 ${ttsSegmentIndex + 1} 段 · 跟随原文，后续仍在生成`,
-        'playing'
-      );
-    } else if (task.status === 'completed') {
-      setTtsStatus(`全部 ${total} 段已缓存，可直接播放`, 'completed');
-    } else {
-      setTtsStatus(`已生成 ${completed}/${total} 段，后台继续生成…`, 'generating');
-    }
-    if (task.status !== 'completed' || (ttsWantsPlay && !segment)) scheduleTtsPoll();
-  }
-
-  async function playTtsSegment(index, autoplay = true) {
-    if (!ttsTask) return;
-    const segment = readyTtsSegment(index);
-    ttsSegmentIndex = Math.max(0, Math.min(index, Number(ttsTask.segmentCount || 1) - 1));
-    ttsFollowCueKey = '';
-    if (segment && autoplay) {
-      ttsWantsPlay = false;
-      ttsPlaybackStarting = true;
-    }
-    applyTtsTask({ ...ttsTask, status: ttsTask.status });
-    if (!segment) {
-      ttsPlaybackStarting = false;
-      ttsWantsPlay = autoplay;
-      setTtsStatus(`第 ${ttsSegmentIndex + 1} 段仍在生成，请稍候…`, 'generating');
-      scheduleTtsPoll();
-      return;
-    }
-    const segmentKey = String(ttsSegmentIndex);
-    if (dom.ttsAudio.dataset.segmentIndex !== segmentKey) {
-      dom.ttsAudio.pause();
-      dom.ttsAudio.src = segment.audioUrl;
-      dom.ttsAudio.dataset.segmentIndex = segmentKey;
-      dom.ttsAudio.load();
-      dom.ttsProgress.value = '0';
-      const restored = ttsRestoredPosition;
-      if (restored && Number(restored.segment_index) === ttsSegmentIndex) {
-        dom.ttsAudio.addEventListener('loadedmetadata', () => {
-          dom.ttsAudio.currentTime = Math.min(
-            Number(restored.current_time) || 0,
-            Number.isFinite(dom.ttsAudio.duration) ? dom.ttsAudio.duration : Number(restored.current_time) || 0
-          );
-          ttsRestoredPosition = null;
-        }, { once: true });
-      }
-    }
-    dom.ttsSegmentLabel.textContent = `第 ${ttsSegmentIndex + 1} / ${ttsTask.segmentCount} 段`;
-    if (!autoplay) return;
-    ttsWantsPlay = false;
-    try {
-      await updateTtsFollowHighlight({
-        force: true,
-        source: 'start',
-        navigation: 'force',
-      });
-      await dom.ttsAudio.play();
-      ttsIsPlaying = true;
-      ttsPlaybackStarting = false;
-      setTtsStatus(
-        ttsTask.status === 'completed'
-          ? `正在播放第 ${ttsSegmentIndex + 1} 段 · 跟随原文，暂停后可翻页`
-          : `正在播放第 ${ttsSegmentIndex + 1} 段 · 跟随原文，后续仍在生成`,
-        'playing'
-      );
-    } catch (err) {
-      ttsIsPlaying = false;
-      ttsPlaybackStarting = false;
-      console.warn('Audio autoplay was blocked:', err);
-      setTtsStatus('音频已就绪，请点“播放”继续', 'ready');
-    }
-  }
-
-  function handleTtsOptionChange() {
-    if (!ttsTask) return;
-    // Do not save the old audio position under the newly selected options.
-    ttsTask = null;
-    stopTtsForChapter({ resetTask: true });
-    setTtsStatus('声音或语速已变化，请重新点击朗读');
-  }
-
   // ==================== SEARCH ====================
   function setSearchPanelOpen(open, { clearOnClose = true } = {}) {
     if (open) {
@@ -4429,7 +3523,6 @@
         <div class="search-result-meta">点击跳转</div>
       `;
       item.addEventListener('click', () => {
-        if (blockManualNavigationDuringTts()) return;
         if (result.cfi) currentRendition.display(result.cfi);
         if (isMobileLayout()) {
           setSearchPanelOpen(false, { clearOnClose: false });
@@ -4491,7 +3584,6 @@
           }
           textNode.parentNode.replaceChild(fragment, textNode);
         }
-        ttsFollowDocumentCache = null;
       }
     } catch (e) {
       console.warn('Search highlight failed:', e);
@@ -4508,7 +3600,6 @@
           parent.replaceChild(document.createTextNode(mark.textContent), mark);
           parent.normalize();
         }
-        if (marks.length) ttsFollowDocumentCache = null;
       }
     } catch (e) { /* ignore */ }
   }
@@ -4592,14 +3683,6 @@
       :where(img, svg, video) {
         max-width: 100%;
         height: auto;
-      }
-      html.tts-follow-active .${TTS_FOLLOW_CLASS} {
-        mix-blend-mode: multiply;
-        pointer-events: none !important;
-      }
-      html.tts-follow-active .${TTS_FOLLOW_UNDERLINE_CLASS} {
-        filter: drop-shadow(0 1px 0 rgba(255, 250, 240, 0.72));
-        pointer-events: none !important;
       }
     `;
     doc.head.appendChild(style);
@@ -4819,10 +3902,8 @@
   }
 
   // ==================== APPLY HIGHLIGHT ====================
-  async function applyHighlight(color, extraFields) {
-    if (!pendingSelection || !currentRendition) return null;
-
-    const selectionState = pendingSelection;
+  async function applyHighlight(color, extraFields, { selectionState = pendingSelection, onStored } = {}) {
+    if (!selectionState || !currentRendition) return null;
     const { cfiRange, cfi, text } = selectionState;
     const storedCfi = cfiRange || cfi;
 
@@ -4885,6 +3966,7 @@
       };
 
       await dbPut('highlights', highlight);
+      if (onStored) onStored(highlightId);
       if (currentBookMeta.server_book_id || currentBookMeta.source === 'server') {
         await queueReaderSync(currentBookMeta.id, 'highlight.upsert', highlight.id, highlight);
       }
@@ -4953,20 +4035,87 @@
     );
   }
 
+  function showTemporaryReaderMark(cfi, className, duration = 2500) {
+    if (!currentRendition || !cfi || !currentRendition.annotations ||
+        typeof currentRendition.annotations.mark !== 'function') return false;
+    try {
+      currentRendition.annotations.mark(
+        cfi,
+        { temporary: true, className },
+        null,
+        className,
+        {
+          fill: '#6b7280',
+          'fill-opacity': '0.22',
+          stroke: '#4b5563',
+          'stroke-opacity': '0.55',
+          'pointer-events': 'none',
+        }
+      );
+      window.setTimeout(() => {
+        try { currentRendition.annotations.remove(cfi, 'mark'); } catch (_err) {}
+      }, duration);
+      return true;
+    } catch (err) {
+      console.warn('Temporary reader mark failed:', err);
+      return false;
+    }
+  }
+
   // ==================== NOTE EDITOR ====================
   let editingHighlightId = null;
+  let noteSelection = null;
+  let savedNoteText = '';
+  let savedNoteTags = '';
+  let savedReflectionText = '';
+  let noteSaveInProgress = false;
+  let reflectionSaveInProgress = false;
+  let noteEditorRequest = 0;
+  let materialRequest = 0;
+
+  function hasUnsavedNote() {
+    return !dom.noteModal.hidden &&
+      (dom.noteTextarea.value !== savedNoteText || dom.tagInput.value !== savedNoteTags);
+  }
+
+  function hasUnsavedReflection() {
+    return Boolean(selectedMaterialId) && dom.reflectionEditor.value !== savedReflectionText;
+  }
+
+  function hasUnsavedNotes() {
+    return hasUnsavedNote() || hasUnsavedReflection() || noteSaveInProgress || reflectionSaveInProgress;
+  }
+
+  function canLeaveNoteOperation() {
+    if (!noteSaveInProgress && !reflectionSaveInProgress) return true;
+    showToast('正在保存或删除，请稍候再操作', 'info');
+    return false;
+  }
+
+  function discardUnsavedNotes() {
+    if (!canLeaveNoteOperation()) return false;
+    if (!hasUnsavedNotes()) return true;
+    if (!confirm('感悟或标签有未保存的修改，确定放弃修改并离开吗？')) return false;
+    clearSelectedMaterial();
+    closeNoteEditor({ discard: true });
+    return true;
+  }
 
   function openNoteEditor(highlightId) {
+    if (!dom.noteModal.hidden && editingHighlightId === highlightId) return;
+    if (!canLeaveNoteOperation()) return;
+    const request = ++noteEditorRequest;
     setReaderChromeVisible(true);
     cancelReaderChromeHide();
     rememberDialogTrigger();
     const h = dbGet('highlights', highlightId);
     h.then((highlight) => {
-      if (!highlight) return;
+      if (!highlight || request !== noteEditorRequest) return;
+      if (hasUnsavedNote() && !confirm('感悟或标签有未保存的修改，确定放弃修改吗？')) return;
       editingHighlightId = highlightId;
       dom.notePreviewText.textContent = highlight.highlight_text;
-      dom.noteTextarea.value = highlight.note || '';
-      dom.tagInput.value = (highlight.tags || []).join(', ');
+      dom.noteTextarea.value = savedNoteText = highlight.note || '';
+      dom.tagInput.value = savedNoteTags = (highlight.tags || []).join(', ');
       dom.btnDeleteNote.hidden = false;
       dom.noteModal.hidden = false;
       safeFocus(dom.noteTextarea);
@@ -4974,6 +4123,10 @@
   }
 
   function openNewNoteEditor() {
+    if (!dom.noteModal.hidden || !canLeaveNoteOperation()) return;
+    noteEditorRequest++;
+    savedNoteText = '';
+    savedNoteTags = '';
     if (!pendingSelection) {
       showToast('请先选中一段文字', 'info');
       return;
@@ -4982,7 +4135,8 @@
     cancelReaderChromeHide();
     rememberDialogTrigger();
     editingHighlightId = null;
-    dom.notePreviewText.textContent = pendingSelection.text;
+    noteSelection = { ...pendingSelection };
+    dom.notePreviewText.textContent = noteSelection.text;
     dom.noteTextarea.value = '';
     dom.tagInput.value = '';
     dom.btnDeleteNote.hidden = true;
@@ -4991,14 +4145,18 @@
   }
 
   async function saveNote() {
-    const noteText = dom.noteTextarea.value.trim();
-    const tagStr = dom.tagInput.value.trim();
-    const tags = tagStr ? tagStr.split(/[,，]/).map(t => t.trim()).filter(Boolean) : [];
-
-    if (editingHighlightId) {
-      // Editing existing highlight
-      const h = await dbGet('highlights', editingHighlightId);
-      if (h) {
+    if (noteSaveInProgress) return;
+    const inputText = dom.noteTextarea.value;
+    const inputTags = dom.tagInput.value;
+    const noteText = inputText.trim();
+    const tags = inputTags.split(/[,，]/).map(t => t.trim()).filter(Boolean);
+    const highlightId = editingHighlightId;
+    noteSaveInProgress = true;
+    dom.btnSaveNote.disabled = true;
+    try {
+      if (highlightId) {
+        const h = await dbGet('highlights', highlightId);
+        if (!h) throw new Error('笔记不存在');
         h.note = noteText;
         h.tags = tags;
         h.synced = false;
@@ -5006,44 +4164,56 @@
         h.status = noteText ? 'reflected' : 'raw';
         await dbPut('highlights', h);
         if (currentBookMeta && (currentBookMeta.server_book_id || currentBookMeta.source === 'server')) {
-          await queueReaderSync(currentBookMeta.id, 'highlight.upsert', h.id, h);
+          await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
         }
+      } else {
+        const createdId = await applyHighlight('yellow', { note: noteText, tags }, {
+          selectionState: noteSelection,
+          onStored: (id) => {
+            editingHighlightId = id;
+            dom.btnDeleteNote.hidden = false;
+          },
+        });
+        if (!createdId) throw new Error('无法保存选中的文字');
       }
-    } else {
-      // New highlight + note (selected text without prior highlight)
-      if (!pendingSelection) return;
-      const highlightId = await applyHighlight('yellow', {
-        note: noteText,
-        tags: tags,
-      });
-      if (highlightId) {
-        const h = await dbGet('highlights', highlightId);
-        if (h) {
-          h.synced = false;
-          h.updated_at = new Date().toISOString();
-          await dbPut('highlights', h);
-          if (currentBookMeta && (currentBookMeta.server_book_id || currentBookMeta.source === 'server')) {
-            await queueReaderSync(currentBookMeta.id, 'highlight.upsert', h.id, h);
-          }
-        }
-      }
+      savedNoteText = inputText;
+      savedNoteTags = inputTags;
+      if (!hasUnsavedNote()) closeNoteEditor({ discard: true });
+      await renderNotes();
+      updateSyncBadge();
+      showToast(hasUnsavedNote() ? '笔记已保存，后续修改尚未保存' : '笔记已保存', 'success');
+    } catch (err) {
+      console.error('Note save failed:', err);
+      showToast('笔记保存失败，请重试', 'error');
+    } finally {
+      noteSaveInProgress = false;
+      dom.btnSaveNote.disabled = false;
     }
-
-    closeNoteEditor();
-    await renderNotes();
-    updateSyncBadge();
-    showToast('笔记已保存', 'success');
   }
 
   async function deleteNoteHighlight() {
-    if (!editingHighlightId) return;
+    if (!editingHighlightId || !canLeaveNoteOperation()) return;
     if (!confirm('确定删除这条划线/笔记吗？')) return;
     await deleteHighlightById(editingHighlightId);
   }
 
   async function deleteHighlightById(highlightId) {
-    if (!highlightId) return;
+    if (!highlightId || !canLeaveNoteOperation()) return;
+    noteSaveInProgress = true;
+    const controls = [dom.noteTextarea, dom.tagInput, dom.btnSaveNote, dom.btnDeleteNote];
+    controls.forEach(control => { control.disabled = true; });
+    try {
+      await removeHighlightById(highlightId);
+    } catch (err) {
+      console.error('Note delete failed:', err);
+      showToast('笔记删除失败，请重试', 'error');
+    } finally {
+      noteSaveInProgress = false;
+      controls.forEach(control => { control.disabled = false; });
+    }
+  }
 
+  async function removeHighlightById(highlightId) {
     const h = await dbGet('highlights', highlightId);
     if (!h) return;
 
@@ -5074,12 +4244,11 @@
       await queueHighlightDelete(h);
     }
     await dbDelete('highlights', highlightId);
-    selectedMaterialIds.delete(highlightId);
     if (selectedMaterialId === highlightId) {
       clearSelectedMaterial();
     }
     if (editingHighlightId === highlightId) {
-      closeNoteEditor();
+      closeNoteEditor({ discard: true });
     }
     await renderNotes();
     await renderMaterials();
@@ -5087,11 +4256,20 @@
     showToast('已删除', 'info');
   }
 
-  function closeNoteEditor() {
+  function closeNoteEditor({ discard = false } = {}) {
+    if (!discard && !canLeaveNoteOperation()) return false;
+    if (!discard && hasUnsavedNote() &&
+        !confirm('感悟或标签有未保存的修改，确定放弃修改并关闭吗？')) return false;
+    noteEditorRequest++;
+    const wasOpen = !dom.noteModal.hidden;
     dom.noteModal.hidden = true;
     editingHighlightId = null;
-    restoreDialogTrigger();
+    noteSelection = null;
+    savedNoteText = '';
+    savedNoteTags = '';
+    if (wasOpen) restoreDialogTrigger();
     scheduleReaderChromeHide();
+    return true;
   }
 
   // ==================== TABLE OF CONTENTS / BOOKMARKS ====================
@@ -5158,15 +4336,48 @@
   }
 
   async function gotoTocItem(item) {
-    if (blockManualNavigationDuringTts()) return;
     if (!currentRendition || !item || !item.href) return;
     try {
       await currentRendition.display(item.href);
-      if (isMobileLayout()) setReaderNavigatorOpen(false);
     } catch (err) {
       console.warn('Failed to navigate to chapter:', err);
       showToast('无法打开该章节', 'warning');
+      return;
     }
+
+    await new Promise(resolve => window.setTimeout(resolve, 40));
+    const location = currentRendition.currentLocation();
+    if (location && location.start) handleLocationChange(location);
+    const targetSection = currentBook && currentBook.spine && currentBook.spine.get(item.href);
+    const targetHref = normalizeReaderHref(item.href);
+    const locationHref = location && location.start && normalizeReaderHref(location.start.href);
+    let anchorCfi = location && location.start && location.start.cfi &&
+      (locationHref === targetHref || locationHref.endsWith('/' + targetHref) || targetHref.endsWith('/' + locationHref))
+      ? location.start.cfi
+      : '';
+    if ((!anchorCfi || normalizeReaderHref(currentChapterId) !== targetHref) && targetSection) {
+      try {
+        await targetSection.load(currentBook.load.bind(currentBook));
+        if (typeof targetSection.cfiFromElement === 'function' && targetSection.document && targetSection.document.body) {
+          anchorCfi = targetSection.cfiFromElement(targetSection.document.body);
+        }
+      } catch (err) {
+        console.warn('Chapter anchor could not be resolved:', err);
+      }
+    }
+    if (!anchorCfi) anchorCfi = getCurrentAnchorCfi();
+    if (anchorCfi && currentBookMeta) {
+      const percent = getLocationCount(currentRendition.book && currentRendition.book.locations) > 0
+        ? percentageFromCfi(anchorCfi)
+        : null;
+      try {
+        await persistReaderProgress(anchorCfi, percent, { force: true });
+      } catch (err) {
+        console.warn('Chapter opened but its position could not be saved:', err);
+        showToast('章节已打开，当前位置将在稍后重试保存', 'warning');
+      }
+    }
+    if (isMobileLayout()) setReaderNavigatorOpen(false);
   }
 
   async function addBookmark() {
@@ -5241,7 +4452,6 @@
   }
 
   async function gotoBookmark(bookmark) {
-    if (blockManualNavigationDuringTts()) return;
     if (!currentRendition || !bookmark || !bookmark.cfi) return;
     try {
       await currentRendition.display(bookmark.cfi);
@@ -5330,20 +4540,11 @@
       });
 
       item.querySelector('[data-action="goto"]').addEventListener('click', async () => {
-        if (blockManualNavigationDuringTts()) return;
         if (!currentRendition || !h.cfi) return;
         try {
-          // Try to navigate to the highlight's location
           await currentRendition.display(h.cfi);
-          // After navigation, briefly flash the highlight
-          setTimeout(() => {
-            try {
-              applyAnnotationHighlight(h.cfi, h.color || 'yellow', { flash: true });
-              // Remove the flash highlight after 2 seconds
-              setTimeout(() => {
-                try { currentRendition.annotations.remove(h.cfi, 'highlight'); } catch (_e) {}
-              }, 2000);
-            } catch (_e) {}
+          window.setTimeout(() => {
+            showTemporaryReaderMark(h.cfi, 'marginalia-highlight-flash', 2000);
           }, 500);
         } catch (err) {
           console.warn('Failed to navigate to highlight:', err);
@@ -5435,357 +4636,6 @@
       readerNotesHoverCloseTimer = null;
       toggleNotesPanel(false);
     }, 160);
-  }
-
-  function toggleAiPanel(forceOpen) {
-    const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : dom.aiPanel.classList.contains('collapsed');
-    if (shouldOpen) {
-      setReaderChromeVisible(true);
-      cancelReaderChromeHide();
-      if (!isMobileLayout()) setReaderNavigatorOpen(false);
-      closeOtherMobileReaderPanels('ai');
-      if (isMobileLayout()) setReaderToolsOpen(false, { skipChromeSchedule: true });
-    }
-    dom.aiPanel.classList.toggle('collapsed', !shouldOpen);
-    dom.readerMain.classList.toggle('ai-collapsed', !shouldOpen);
-    refreshReaderLayout();
-    syncReaderToolStates();
-    syncReaderPanelBackdrop();
-    if (shouldOpen) {
-      renderAiMessages();
-      if (!isMobileLayout()) setTimeout(() => dom.aiQuestionInput.focus(), 0);
-    } else {
-      scheduleReaderChromeHide();
-    }
-  }
-
-  function setAiIndexState(status, errorMessage = '') {
-    const messages = {
-      uploading: '正在上传 EPUB 并建立 AI 知识库…',
-      pending: '书籍已入库，正在等待索引…',
-      indexing: '正在解析正文并生成向量索引…',
-      ready: '索引已就绪，回答将严格依据原文与笔记。',
-      failed: errorMessage ? `索引失败：${errorMessage}` : '索引失败，请重试。',
-      outdated: '索引版本已过期，正在重建…',
-      unregistered: '正在准备 AI 索引…',
-    };
-    dom.aiIndexStatus.textContent = messages[status] || messages.unregistered;
-    dom.aiIndexStatus.dataset.state = status === 'ready' ? 'ready' : (status === 'failed' ? 'failed' : '');
-    dom.btnRetryAiIndex.hidden = status !== 'failed';
-    const canAsk = status === 'ready' && !aiRequestInFlight;
-    dom.aiQuestionInput.disabled = !canAsk;
-    dom.btnSendAi.disabled = !canAsk;
-  }
-
-  function renderAiConversationOptions() {
-    const options = ['<option value="">新会话</option>'].concat(
-      aiConversations.map(item => (
-        `<option value="${escapeHTML(item.id)}">${escapeHTML(item.title || '新会话')}</option>`
-      ))
-    );
-    dom.aiConversationSelect.innerHTML = options.join('');
-    dom.aiConversationSelect.value = currentAiConversationId || '';
-    dom.btnDeleteAiConversation.disabled = !currentAiConversationId;
-  }
-
-  async function loadAiConversations(preferredId = currentAiConversationId) {
-    if (!currentBookMeta || !currentBookMeta.knowledge_book_id || currentBookMeta.knowledge_status !== 'ready') {
-      aiConversations = [];
-      currentAiConversationId = null;
-      renderAiConversationOptions();
-      return;
-    }
-    const resp = await fetch(
-      API_BASE + '/api/knowledge/books/' +
-      encodeURIComponent(currentBookMeta.knowledge_book_id) + '/conversations'
-    );
-    if (!resp.ok) throw new Error(`Server responded with ${resp.status}`);
-    const data = await resp.json();
-    aiConversations = data.conversations || [];
-    const preferred = aiConversations.find(item => item.id === preferredId);
-    currentAiConversationId = preferred ? preferred.id : (aiConversations[0] ? aiConversations[0].id : null);
-    renderAiConversationOptions();
-    await loadAiMessages();
-  }
-
-  async function loadAiMessages() {
-    if (!currentAiConversationId) {
-      aiMessages = [];
-      renderAiMessages();
-      return;
-    }
-    const resp = await fetch(
-      API_BASE + '/api/knowledge/conversations/' +
-      encodeURIComponent(currentAiConversationId) + '/messages?limit=100'
-    );
-    if (!resp.ok) throw new Error(`Server responded with ${resp.status}`);
-    const data = await resp.json();
-    aiMessages = (data.messages || []).map(item => ({
-      id: item.id,
-      role: item.role,
-      content: item.content,
-      status: item.status,
-      citations: item.citations || [],
-    }));
-    renderAiMessages();
-  }
-
-  async function createAiConversation() {
-    if (!currentBookMeta || currentBookMeta.knowledge_status !== 'ready') return null;
-    const resp = await fetch(
-      API_BASE + '/api/knowledge/books/' +
-      encodeURIComponent(currentBookMeta.knowledge_book_id) + '/conversations',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: '' }),
-      }
-    );
-    if (!resp.ok) throw new Error(`Server responded with ${resp.status}`);
-    const conversation = await resp.json();
-    currentAiConversationId = conversation.id;
-    aiConversations.unshift(conversation);
-    aiMessages = [];
-    renderAiConversationOptions();
-    renderAiMessages();
-    return conversation;
-  }
-
-  async function deleteCurrentAiConversation() {
-    if (!currentAiConversationId || !confirm('确定删除当前 AI 问答会话吗？')) return;
-    const resp = await fetch(
-      API_BASE + '/api/knowledge/conversations/' +
-      encodeURIComponent(currentAiConversationId),
-      { method: 'DELETE' }
-    );
-    if (!resp.ok) {
-      showToast('会话删除失败', 'error');
-      return;
-    }
-    currentAiConversationId = null;
-    await loadAiConversations();
-    showToast('会话已删除', 'info');
-  }
-
-  function renderAiMessages() {
-    if (aiMessages.length === 0) {
-      dom.aiMessages.innerHTML = '<div class="ai-empty">问一个和这本书有关的问题。</div>';
-      return;
-    }
-    dom.aiMessages.innerHTML = aiMessages.map((msg, messageIndex) => {
-      const citations = (msg.citations || []).map((citation, citationIndex) => `
-        <button class="ai-citation" type="button"
-          data-message-index="${messageIndex}" data-citation-index="${citationIndex}">
-          <strong>[${escapeHTML(citation.label || '')}] ${escapeHTML(citation.chapter || '划线与感悟')}</strong><br>
-          ${escapeHTML((citation.quote || '').slice(0, 120))}
-        </button>
-      `).join('');
-      const stateClass = msg.status === 'streaming' ? ' streaming' : '';
-      return `<div class="ai-message ${msg.role}${stateClass}">
-        ${escapeHTML(msg.content)}
-        ${citations ? `<div class="ai-citations">${citations}</div>` : ''}
-      </div>`;
-    }).join('');
-    dom.aiMessages.querySelectorAll('.ai-citation').forEach(button => {
-      button.addEventListener('click', () => {
-        const message = aiMessages[Number(button.dataset.messageIndex)];
-        const citation = message && message.citations[Number(button.dataset.citationIndex)];
-        if (citation) jumpToAiCitation(citation);
-      });
-    });
-    dom.aiMessages.scrollTop = dom.aiMessages.scrollHeight;
-  }
-
-  function addAiMessage(role, content, extra = {}) {
-    const message = { role, content, status: 'completed', citations: [], ...extra };
-    aiMessages.push(message);
-    renderAiMessages();
-    return message;
-  }
-
-  async function collectBookQaContext(question) {
-    const highlights = currentBookMeta
-      ? await dbGetByIndex('highlights', 'by_book', currentBookMeta.id)
-      : [];
-    highlights.sort((a, b) => (a.progress_percent || 0) - (b.progress_percent || 0));
-    return {
-      question,
-      knowledge_book_id: currentBookMeta ? currentBookMeta.knowledge_book_id : null,
-      book_title: currentBookMeta ? currentBookMeta.book_title || '' : '',
-      book_author: currentBookMeta ? currentBookMeta.book_author || '' : '',
-      chapter: currentChapter || '',
-      progress_percent: currentBookMeta ? currentBookMeta.progress_percent || 0 : 0,
-      highlights: highlights.map(h => ({
-        id: h.id || '',
-        cfi: h.cfi || '',
-        highlight_text: h.highlight_text || '',
-        note: h.note || '',
-        tags: h.tags || [],
-        chapter: h.chapter || '',
-        progress_percent: h.progress_percent || 0,
-      })),
-    };
-  }
-
-  async function parseSseResponse(response, onEvent) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() || '';
-      for (const block of blocks) {
-        let event = 'message';
-        let data = '';
-        for (const line of block.split(/\r?\n/)) {
-          if (line.startsWith('event:')) event = line.slice(6).trim();
-          if (line.startsWith('data:')) data += line.slice(5).trim();
-        }
-        if (!data) continue;
-        onEvent(event, JSON.parse(data));
-      }
-      if (done) break;
-    }
-  }
-
-  async function askBookQuestion(question) {
-    const trimmed = question.trim();
-    if (!trimmed) return;
-    if (!currentBookMeta) {
-      showToast('请先打开一本书', 'info');
-      return;
-    }
-    if (aiRequestInFlight) return;
-    if (currentBookMeta.knowledge_status !== 'ready') {
-      showToast('请等待书籍 AI 索引完成', 'info');
-      return;
-    }
-
-    toggleAiPanel(true);
-    if (!currentAiConversationId) await createAiConversation();
-    addAiMessage('user', trimmed);
-    dom.aiQuestionInput.value = '';
-    aiRequestInFlight = true;
-    setAiIndexState('ready');
-    const assistantMessage = addAiMessage('assistant', '', { status: 'streaming' });
-
-    try {
-      const payload = await collectBookQaContext(trimmed);
-      const resp = await fetch(
-        API_BASE + '/api/knowledge/conversations/' +
-        encodeURIComponent(currentAiConversationId) + '/messages/stream',
-        {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: trimmed,
-          current_location: {
-            chapter: payload.chapter,
-            href: currentCfi && currentBook && currentBook.spine
-              ? ((currentBook.spine.get(currentCfi) || {}).href || '')
-              : '',
-            cfi: currentCfi || '',
-            progress_percent: payload.progress_percent,
-          },
-          local_highlights: payload.highlights,
-        }),
-      });
-      if (!resp.ok) {
-        const error = await resp.json().catch(() => ({}));
-        const detail = error.detail && (error.detail.message || error.detail);
-        throw new Error(typeof detail === 'string' ? detail : `Server responded with ${resp.status}`);
-      }
-      let streamError = null;
-      await parseSseResponse(resp, (event, data) => {
-        if (event === 'delta') assistantMessage.content += data.text || '';
-        if (event === 'citations') assistantMessage.citations = data.items || [];
-        if (event === 'done') assistantMessage.status = 'completed';
-        if (event === 'error') streamError = new Error(data.message || 'AI 问答失败');
-        renderAiMessages();
-      });
-      if (streamError) throw streamError;
-      assistantMessage.status = 'completed';
-      if (!assistantMessage.content) assistantMessage.content = '没有返回回答。';
-      renderAiMessages();
-      await loadAiConversations(currentAiConversationId);
-    } catch (err) {
-      console.error('Book Q&A failed:', err);
-      assistantMessage.role = 'error';
-      assistantMessage.status = 'failed';
-      assistantMessage.content = assistantMessage.content || ('问答失败：' + (
-        typeof err.message === 'string' ? err.message : '未知错误'
-      ));
-      renderAiMessages();
-    } finally {
-      aiRequestInFlight = false;
-      setAiIndexState(currentBookMeta.knowledge_status, currentBookMeta.knowledge_error || '');
-    }
-  }
-
-  function findTextRange(doc, anchorText) {
-    const target = String(anchorText || '').replace(/\s+/g, ' ').trim();
-    if (!target) return null;
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-    const positions = [];
-    let normalized = '';
-    let previousSpace = false;
-    let node;
-    while ((node = walker.nextNode())) {
-      for (let i = 0; i < node.nodeValue.length; i += 1) {
-        const char = node.nodeValue[i];
-        const isSpace = /\s/.test(char);
-        if (isSpace && previousSpace) continue;
-        normalized += isSpace ? ' ' : char;
-        positions.push({ node, offset: i });
-        previousSpace = isSpace;
-      }
-    }
-    const start = normalized.indexOf(target);
-    if (start < 0) return null;
-    const end = Math.min(positions.length - 1, start + target.length - 1);
-    const range = doc.createRange();
-    range.setStart(positions[start].node, positions[start].offset);
-    range.setEnd(positions[end].node, positions[end].offset + 1);
-    return range;
-  }
-
-  async function jumpToAiCitation(citation) {
-    if (blockManualNavigationDuringTts()) return;
-    if (!currentRendition || !currentBook) return;
-    try {
-      let cfi = citation.cfi || '';
-      if (!cfi && citation.href) {
-        let section = currentBook.spine.get(citation.href);
-        if (!section && currentBook.spine.spineItems) {
-          section = currentBook.spine.spineItems.find(item => (
-            item.href === citation.href || item.href.endsWith(citation.href)
-          ));
-        }
-        if (section) {
-          await section.load(currentBook.load.bind(currentBook));
-          const range = findTextRange(section.document, citation.anchor_text || citation.quote);
-          if (range) cfi = section.cfiFromRange(range);
-        }
-      }
-      await currentRendition.display(cfi || citation.href);
-      if (cfi) {
-        currentRendition.annotations.highlight(cfi, {}, () => {}, 'ai-citation', {
-          fill: '#d99a2b',
-          'fill-opacity': '0.35',
-        });
-        setTimeout(() => {
-          try { currentRendition.annotations.remove(cfi, 'highlight'); } catch (_e) {}
-        }, 2500);
-      }
-    } catch (err) {
-      console.warn('Citation navigation failed:', err);
-      if (citation.href) {
-        try { await currentRendition.display(citation.href); } catch (_e) {}
-      }
-      showToast('已跳到引用章节，未能精确定位段落', 'warning');
-    }
   }
 
   // ==================== SYNC ====================
@@ -5948,10 +4798,9 @@
     }
   }
 
-  // ==================== CREATION WORKSPACE ====================
+  // ==================== NOTES WORKSPACE ====================
   async function renderCreationWorkspace() {
     await renderMaterials();
-    await renderDrafts();
   }
 
   async function getFilteredLocalMaterials() {
@@ -5980,52 +4829,53 @@
   async function renderMaterials() {
     const materials = await getFilteredLocalMaterials();
     dom.materialsList.innerHTML = '';
+    if (!materials.some(h => h.id === selectedMaterialId) &&
+        !hasUnsavedReflection() && !reflectionSaveInProgress) clearSelectedMaterial();
 
     if (materials.length === 0) {
       dom.materialsList.innerHTML = '<div class="empty-notes">还没有素材。先去阅读页划线并保存感悟。</div>';
-      updateSelectedMaterialCount();
       return;
     }
 
     for (const h of materials) {
       const item = document.createElement('div');
       item.className = `material-card highlight-${h.color || 'yellow'}`;
-      if (selectedMaterialIds.has(h.id)) item.classList.add('selected');
+      item.classList.toggle('selected', selectedMaterialId === h.id);
       item.dataset.highlightId = h.id;
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-pressed', String(selectedMaterialId === h.id));
       const tags = (h.tags || []).map(t => `<span class="note-item-tag">${escapeHTML(t)}</span>`).join('');
       item.innerHTML = `
-        <label class="material-check">
-          <input type="checkbox" ${selectedMaterialIds.has(h.id) ? 'checked' : ''}>
-          <span>${escapeHTML(h.book_title || '未命名书籍')}</span>
-        </label>
+        <div class="material-title">${escapeHTML(h.book_title || '未命名书籍')}</div>
         <div class="material-quote">${escapeHTML(h.highlight_text || '')}</div>
         <div class="material-note ${h.note ? 'has-note' : ''}">${escapeHTML(h.note || '还没有感悟')}</div>
         <div class="note-item-tags">${tags}</div>
         <div class="note-item-meta">${h.progress_percent || 0}% · ${h.status || 'raw'} · ${h.synced ? '已同步' : '未同步'}</div>
       `;
-
-      item.querySelector('input').addEventListener('change', (e) => {
-        if (e.target.checked) {
-          selectedMaterialIds.add(h.id);
-        } else {
-          selectedMaterialIds.delete(h.id);
-        }
-        updateSelectedMaterialCount();
-        item.classList.toggle('selected', e.target.checked);
-      });
-      item.addEventListener('click', (e) => {
-        if (e.target.tagName === 'INPUT') return;
+      item.addEventListener('click', () => openMaterialForReflection(h.id));
+      item.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
         openMaterialForReflection(h.id);
       });
       dom.materialsList.appendChild(item);
     }
-    updateSelectedMaterialCount();
   }
 
   async function openMaterialForReflection(highlightId) {
+    const request = ++materialRequest;
+    if (selectedMaterialId === highlightId || !canLeaveNoteOperation()) return;
     const h = await dbGet('highlights', highlightId);
-    if (!h) return;
+    if (!h || request !== materialRequest || currentView !== 'creation' || !canLeaveNoteOperation()) return;
+    if (hasUnsavedReflection() && !confirm('感悟有未保存的修改，确定放弃修改并切换素材吗？')) return;
+    savedReflectionText = h.note || '';
     selectedMaterialId = highlightId;
+    dom.materialsList.querySelectorAll('.material-card').forEach(item => {
+      const selected = item.dataset.highlightId === highlightId;
+      item.classList.toggle('selected', selected);
+      item.setAttribute('aria-pressed', String(selected));
+    });
     dom.selectedMaterialDetail.innerHTML = `
       <div class="selected-quote">
         <div class="note-item-meta">${escapeHTML(h.book_title || '')} · ${escapeHTML(h.chapter || '')} · ${h.progress_percent || 0}%</div>
@@ -6037,160 +4887,81 @@
     dom.btnDeleteReflection.disabled = !h.note;
   }
 
-  function updateSelectedMaterialCount() {
-    dom.selectedMaterialCount.textContent = `${selectedMaterialIds.size} 条已选`;
-  }
-
   function clearSelectedMaterial() {
+    materialRequest++;
+    savedReflectionText = '';
     selectedMaterialId = null;
-    dom.selectedMaterialDetail.innerHTML = '<p class="empty-hint">从左侧选择一条素材后编辑感悟；勾选多条素材后可生成内容。</p>';
+    dom.selectedMaterialDetail.innerHTML = '<p class="empty-hint">从左侧选择一条素材后编辑感悟。</p>';
     dom.reflectionEditor.value = '';
     dom.btnSaveReflection.disabled = true;
     dom.btnDeleteReflection.disabled = true;
   }
 
   async function saveCurrentReflection() {
-    if (!selectedMaterialId) return;
-    const h = await dbGet('highlights', selectedMaterialId);
-    if (!h) return;
-    h.note = dom.reflectionEditor.value.trim();
-    h.status = h.note ? 'reflected' : 'raw';
-    h.updated_at = new Date().toISOString();
-    h.synced = false;
-    await dbPut('highlights', h);
-    const reflectionBook = await dbGet('books', h.book_id);
-    if (reflectionBook &&
-        (reflectionBook.server_book_id || reflectionBook.source === 'server')) {
-      await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
+    if (!selectedMaterialId || reflectionSaveInProgress) return;
+    const highlightId = selectedMaterialId;
+    const inputText = dom.reflectionEditor.value;
+    reflectionSaveInProgress = true;
+    dom.btnSaveReflection.disabled = true;
+    try {
+      const h = await dbGet('highlights', highlightId);
+      if (!h) throw new Error('感悟不存在');
+      h.note = inputText.trim();
+      h.status = h.note ? 'reflected' : 'raw';
+      h.updated_at = new Date().toISOString();
+      h.synced = false;
+      await dbPut('highlights', h);
+      const reflectionBook = await dbGet('books', h.book_id);
+      if (reflectionBook &&
+          (reflectionBook.server_book_id || reflectionBook.source === 'server')) {
+        await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
+      }
+      savedReflectionText = inputText;
+      dom.btnDeleteReflection.disabled = !h.note;
+      await renderMaterials();
+      updateSyncBadge();
+      showToast(hasUnsavedReflection() ? '感悟已保存，后续修改尚未保存' : '感悟已保存', 'success');
+    } catch (err) {
+      console.error('Reflection save failed:', err);
+      showToast('感悟保存失败，请重试', 'error');
+    } finally {
+      reflectionSaveInProgress = false;
+      dom.btnSaveReflection.disabled = !selectedMaterialId;
     }
-    await renderMaterials();
-    dom.btnDeleteReflection.disabled = !h.note;
-    updateSyncBadge();
-    showToast('感悟已保存', 'success');
   }
 
   async function deleteCurrentReflection() {
-    if (!selectedMaterialId) return;
-    const h = await dbGet('highlights', selectedMaterialId);
-    if (!h || !h.note) return;
-    if (!confirm('确定删除这条感悟吗？划线和标签会保留。')) return;
-
-    h.note = '';
-    h.status = 'raw';
-    h.updated_at = new Date().toISOString();
-    h.synced = false;
-    await dbPut('highlights', h);
-    const reflectionBook = await dbGet('books', h.book_id);
-    if (reflectionBook &&
-        (reflectionBook.server_book_id || reflectionBook.source === 'server')) {
-      await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
-    }
-    dom.reflectionEditor.value = '';
-    dom.btnDeleteReflection.disabled = true;
-    await renderMaterials();
-    await renderNotes();
-    updateSyncBadge();
-    showToast('感悟已删除', 'info');
-  }
-
-  async function generateDraft(target) {
-    if (selectedMaterialIds.size === 0) {
-      showToast('请先勾选素材', 'info');
-      return;
-    }
-
-    await syncToBackend();
-    const payload = {
-      target,
-      highlight_ids: Array.from(selectedMaterialIds),
-      topic: dom.draftTopic.value.trim(),
-      tone: '',
-      extra_instruction: dom.draftInstruction.value.trim(),
-    };
-
-    const button = target === 'video' ? dom.btnGenerateVideo : dom.btnGenerateArticle;
-    button.disabled = true;
-    button.textContent = '生成中...';
+    if (!selectedMaterialId || !canLeaveNoteOperation()) return;
+    const highlightId = selectedMaterialId;
+    reflectionSaveInProgress = true;
     try {
-      const resp = await fetch(API_BASE + '/api/drafts/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) {
-        const error = await resp.json().catch(() => ({}));
-        throw new Error(error.detail || `Server responded with ${resp.status}`);
+      const h = await dbGet('highlights', highlightId);
+      if (!h || !h.note) return;
+      if (!confirm('确定删除这条感悟吗？划线和标签会保留。')) return;
+      const inputText = dom.reflectionEditor.value;
+      h.note = '';
+      h.status = 'raw';
+      h.updated_at = new Date().toISOString();
+      h.synced = false;
+      await dbPut('highlights', h);
+      const reflectionBook = await dbGet('books', h.book_id);
+      if (reflectionBook &&
+          (reflectionBook.server_book_id || reflectionBook.source === 'server')) {
+        await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
       }
-      const draft = await resp.json();
-      await renderDrafts();
-      openDraftEditor(draft);
-      showToast('稿件已生成', 'success');
+      savedReflectionText = '';
+      if (dom.reflectionEditor.value === inputText) dom.reflectionEditor.value = '';
+      dom.btnDeleteReflection.disabled = true;
+      await renderMaterials();
+      await renderNotes();
+      updateSyncBadge();
+      showToast('感悟已删除', 'info');
     } catch (err) {
-      console.error('Draft generation failed:', err);
-      showToast('生成失败：' + err.message, 'error');
+      console.error('Reflection delete failed:', err);
+      showToast('感悟删除失败，请重试', 'error');
     } finally {
-      button.disabled = false;
-      button.textContent = target === 'video' ? '生成视频号稿' : '生成公众号稿';
+      reflectionSaveInProgress = false;
     }
-  }
-
-  async function renderDrafts() {
-    try {
-      const resp = await fetch(API_BASE + '/api/drafts');
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const drafts = data.drafts || [];
-      dom.draftList.innerHTML = '';
-      if (drafts.length === 0) {
-        dom.draftList.innerHTML = '<div class="empty-notes">还没有生成稿件</div>';
-        return;
-      }
-      for (const draft of drafts) {
-        const item = document.createElement('div');
-        item.className = 'draft-card';
-        item.innerHTML = `
-          <div class="draft-card-title">${escapeHTML(draft.title || '未命名稿件')}</div>
-          <div class="note-item-meta">${draft.target === 'video' ? '视频号' : '公众号'} · ${draft.exported_to_obsidian ? '已导出' : '未导出'}</div>
-        `;
-        item.addEventListener('click', () => openDraftEditor(draft));
-        dom.draftList.appendChild(item);
-      }
-    } catch (e) {
-      console.warn('Failed to fetch drafts:', e);
-    }
-  }
-
-  function openDraftEditor(draft) {
-    currentDraftId = draft.id;
-    dom.draftEditor.hidden = false;
-    dom.draftTitleEditor.value = draft.title || '';
-    dom.draftContentEditor.value = draft.content || '';
-  }
-
-  async function saveCurrentDraft() {
-    if (!currentDraftId) return;
-    const resp = await fetch(API_BASE + '/api/drafts/' + encodeURIComponent(currentDraftId), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: dom.draftTitleEditor.value.trim() || '未命名稿件',
-        content: dom.draftContentEditor.value,
-      }),
-    });
-    if (!resp.ok) {
-      showToast('草稿保存失败', 'error');
-      return;
-    }
-    const draft = await resp.json();
-    openDraftEditor(draft);
-    await renderDrafts();
-    showToast('草稿已保存', 'success');
-  }
-
-  async function exportCurrentDraft() {
-    if (!currentDraftId) return;
-    await exportToObsidian({ kind: 'draft', draft_id: currentDraftId });
-    await renderDrafts();
   }
 
   async function exportCurrentBook() {
@@ -6232,7 +5003,7 @@
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (controllerChanged) return;
       controllerChanged = true;
-      if (!currentBookMeta && serverMigrationsInFlight.size === 0) {
+      if (!currentBookMeta && serverMigrationsInFlight.size === 0 && !hasUnsavedNotes()) {
         window.location.reload();
         return;
       }
@@ -6288,7 +5059,6 @@
     dom.btnBack.addEventListener('click', returnToHome);
     dom.btnCreationBack.addEventListener('click', returnToHome);
 
-    // AI book Q&A
     dom.btnReaderTools.addEventListener('click', toggleReaderTools);
     dom.btnToggleNavigator.addEventListener('click', toggleReaderNavigator);
     dom.btnCloseNavigator.addEventListener('click', () => setReaderNavigatorOpen(false, { restoreFocus: true }));
@@ -6300,78 +5070,11 @@
       element.addEventListener('focusout', scheduleReaderNavigatorHoverClose);
     });
     dom.btnRevealReaderChrome.addEventListener('click', () => revealReaderChromeTemporarily());
-    dom.btnToggleAi.addEventListener('click', () => toggleAiPanel());
-    dom.btnCloseAi.addEventListener('click', () => toggleAiPanel(false));
-    dom.aiForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      askBookQuestion(dom.aiQuestionInput.value);
-    });
-    dom.aiQuestionInput.addEventListener('paste', (e) => {
-      const pastedText = e.clipboardData?.getData('text/plain');
-      if (typeof pastedText !== 'string' || !/[\r\n]/.test(pastedText)) return;
-
-      e.preventDefault();
-      const normalizedText = pastedText.replace(/[ \t]*[\r\n]+[ \t]*/g, ' ');
-      const start = dom.aiQuestionInput.selectionStart ?? dom.aiQuestionInput.value.length;
-      const end = dom.aiQuestionInput.selectionEnd ?? start;
-      dom.aiQuestionInput.setRangeText(normalizedText, start, end, 'end');
-      dom.aiQuestionInput.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    dom.aiQuestionInput.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
-      e.preventDefault();
-      dom.aiForm.requestSubmit();
-    });
     dom.btnOperationClose.addEventListener('click', () => hideOperationStatus());
     dom.btnOperationRetry.addEventListener('click', async () => {
       if (!operationBookId) return;
       const book = await dbGet('books', operationBookId);
       if (book) await retryBookUpload(book);
-    });
-    dom.aiPanel.querySelectorAll('[data-ai-question]').forEach(btn => {
-      btn.addEventListener('click', () => askBookQuestion(btn.dataset.aiQuestion || ''));
-    });
-    dom.aiConversationSelect.addEventListener('change', async () => {
-      currentAiConversationId = dom.aiConversationSelect.value || null;
-      await loadAiMessages();
-      renderAiConversationOptions();
-    });
-    dom.btnNewAiConversation.addEventListener('click', () => createAiConversation());
-    dom.btnDeleteAiConversation.addEventListener('click', deleteCurrentAiConversation);
-    dom.btnRetryAiIndex.addEventListener('click', async () => {
-      if (!currentBookMeta) return;
-      if (!currentBookMeta.knowledge_book_id) {
-        if (!currentBookMeta.file_blob && currentBookMeta.filename) {
-          await recoverMissingKnowledgeBook(currentBookMeta, { promptForFile: true });
-          return;
-        }
-        await ensureKnowledgeBook(currentBookMeta);
-        return;
-      }
-      try {
-        const resp = await fetch(
-          API_BASE + '/api/knowledge/books/' +
-          encodeURIComponent(currentBookMeta.knowledge_book_id) + '/reindex',
-          { method: 'POST' }
-        );
-        if (resp.status === 404) {
-          await recoverMissingKnowledgeBook(currentBookMeta, {
-            promptForFile: !currentBookMeta.file_blob,
-          });
-          return;
-        }
-        if (!resp.ok) {
-          showToast('索引重试失败', 'error');
-          return;
-        }
-        currentBookMeta.knowledge_status = 'pending';
-        await dbPut('books', currentBookMeta);
-        setAiIndexState('pending');
-        pollKnowledgeStatus(currentBookMeta);
-      } catch (err) {
-        console.error('Knowledge reindex failed:', err);
-        showToast('索引重试失败：无法连接服务器', 'error');
-      }
     });
 
     // Toggle notes panel
@@ -6417,86 +5120,6 @@
     dom.btnCloseNotesPanel.addEventListener('click', () => toggleNotesPanel(false));
     dom.readerPanelBackdrop.addEventListener('click', () => closeMobileReaderPanels({ restoreFocus: true }));
 
-    // Automatic narration
-    dom.btnToggleTts.addEventListener('click', toggleTtsPanel);
-    dom.btnCloseTts.addEventListener('click', () => setTtsPanelOpen(false));
-    dom.btnTtsStart.addEventListener('click', () => startChapterTts({ autoplay: true }));
-    dom.btnTtsPlay.addEventListener('click', () => {
-      if (!ttsTask) {
-        startChapterTts({ autoplay: true });
-      } else {
-        ttsWantsPlay = true;
-        playTtsSegment(ttsSegmentIndex, true);
-      }
-    });
-    dom.btnTtsPause.addEventListener('click', () => {
-      ttsWantsPlay = false;
-      ttsIsPlaying = false;
-      ttsPlaybackStarting = false;
-      pauseTtsFollowNavigation();
-      dom.ttsAudio.pause();
-      saveTtsPosition(true);
-      setTtsStatus(`已暂停第 ${ttsSegmentIndex + 1} 段`, 'paused');
-      if (ttsTask && ttsTask.status !== 'completed') scheduleTtsPoll();
-    });
-    dom.btnTtsPrev.addEventListener('click', () => {
-      saveTtsPosition(true);
-      ttsWantsPlay = true;
-      playTtsSegment(Math.max(0, ttsSegmentIndex - 1), true);
-    });
-    dom.btnTtsNext.addEventListener('click', () => {
-      if (!ttsTask) return;
-      saveTtsPosition(true);
-      ttsWantsPlay = true;
-      playTtsSegment(Math.min(ttsTask.segmentCount - 1, ttsSegmentIndex + 1), true);
-    });
-    dom.ttsVoice.addEventListener('change', handleTtsOptionChange);
-    dom.ttsRate.addEventListener('change', handleTtsOptionChange);
-    dom.ttsAudio.addEventListener('loadedmetadata', () => {
-      dom.ttsProgress.disabled = !Number.isFinite(dom.ttsAudio.duration);
-      dom.ttsTime.textContent = `${formatAudioTime(dom.ttsAudio.currentTime)} / ${formatAudioTime(dom.ttsAudio.duration)}`;
-    });
-    dom.ttsAudio.addEventListener('timeupdate', () => {
-      const duration = dom.ttsAudio.duration;
-      dom.ttsProgress.value = Number.isFinite(duration) && duration > 0
-        ? String(Math.round((dom.ttsAudio.currentTime / duration) * 1000))
-        : '0';
-      dom.ttsTime.textContent = `${formatAudioTime(dom.ttsAudio.currentTime)} / ${formatAudioTime(duration)}`;
-      updateTtsFollowHighlight({ source: 'timeline', navigation: 'force' });
-      saveTtsPosition();
-    });
-    dom.ttsAudio.addEventListener('ended', () => {
-      ttsIsPlaying = false;
-      saveTtsPosition(true);
-      if (dom.ttsContinuous.checked && ttsTask && ttsSegmentIndex + 1 < ttsTask.segmentCount) {
-        ttsWantsPlay = true;
-        playTtsSegment(ttsSegmentIndex + 1, true);
-      } else {
-        ttsWantsPlay = false;
-        ttsPlaybackStarting = false;
-        clearTtsFollowHighlight({ restorePersistent: true });
-        setTtsStatus('当前朗读已结束', 'completed');
-      }
-    });
-    dom.ttsAudio.addEventListener('error', () => {
-      if (!dom.ttsAudio.getAttribute('src')) return;
-      ttsWantsPlay = false;
-      ttsIsPlaying = false;
-      ttsPlaybackStarting = false;
-      clearTtsFollowHighlight({ restorePersistent: true });
-      setTtsStatus('音频加载失败，请重新生成或检查网络', 'failed');
-    });
-    dom.ttsProgress.addEventListener('input', () => {
-      if (!Number.isFinite(dom.ttsAudio.duration)) return;
-      dom.ttsAudio.currentTime = (Number(dom.ttsProgress.value) / 1000) * dom.ttsAudio.duration;
-      updateTtsFollowHighlight({
-        force: true,
-        source: 'seek',
-        navigation: isTtsNavigationLocked() ? 'force' : 'none',
-      });
-    });
-    dom.ttsProgress.addEventListener('change', () => saveTtsPosition(true));
-
     // Search
     dom.btnToggleSearch.addEventListener('click', toggleSearchPanel);
     dom.btnSearch.addEventListener('click', () => {
@@ -6537,10 +5160,6 @@
     dom.materialTagFilter.addEventListener('input', debouncedRenderMaterials);
     dom.btnSaveReflection.addEventListener('click', saveCurrentReflection);
     dom.btnDeleteReflection.addEventListener('click', deleteCurrentReflection);
-    dom.btnGenerateVideo.addEventListener('click', () => generateDraft('video'));
-    dom.btnGenerateArticle.addEventListener('click', () => generateDraft('article'));
-    dom.btnSaveDraft.addEventListener('click', saveCurrentDraft);
-    dom.btnExportDraft.addEventListener('click', exportCurrentDraft);
     dom.btnExportBook.addEventListener('click', exportCurrentBook);
 
     // Highlight color buttons
@@ -6564,8 +5183,8 @@
       if (e.target === dom.noteModal) closeNoteEditor();
     });
     dom.btnCancelBookDelete.addEventListener('click', closeBookDeleteDialog);
-    dom.btnDeleteLocalBook.addEventListener('click', () => confirmBookDelete(false));
-    dom.btnDeleteAllBookData.addEventListener('click', () => confirmBookDelete(true));
+    dom.btnDeleteLocalBook.addEventListener('click', confirmBookDelete);
+    dom.btnDeleteAllBookData.addEventListener('click', confirmBookDelete);
     dom.bookDeleteModal.addEventListener('click', (e) => {
       if (e.target === dom.bookDeleteModal) closeBookDeleteDialog();
     });
@@ -6578,8 +5197,6 @@
           closeNoteEditor();
         } else if (!dom.bookDeleteModal.hidden) {
           closeBookDeleteDialog();
-        } else if (!dom.ttsPanel.hidden) {
-          setTtsPanelOpen(false);
         } else if (closeMobileReaderPanels({ restoreFocus: true })) {
           // Mobile reader panels are modal surfaces and close before the tool menu.
         } else if (!dom.readerToolPanel.hidden) {
@@ -6608,6 +5225,12 @@
         if (!dom.readerView.classList.contains('active')) return;
         syncToBackend();
       }
+    });
+
+    window.addEventListener('beforeunload', (event) => {
+      if (!hasUnsavedNotes()) return;
+      event.preventDefault();
+      event.returnValue = '';
     });
 
     // Online/offline
@@ -6645,14 +5268,6 @@
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         cancelReaderChromeHide();
-        if (!dom.ttsAudio.paused) {
-          dom.ttsAudio.pause();
-          ttsWantsPlay = false;
-          ttsIsPlaying = false;
-          ttsPlaybackStarting = false;
-          saveTtsPosition(true);
-          setTtsStatus(`已暂停第 ${ttsSegmentIndex + 1} 段`, 'paused');
-        }
         return;
       }
       if (navigator.onLine) syncToBackend({ notify: false }).catch(() => {});
@@ -6674,7 +5289,6 @@
     loadReaderChromeAutoHidePreference();
     loadReaderTypographyPreference();
     setReaderNavigatorOpen(false);
-    loadTtsVoices().catch(() => {});
     observeReaderIframes();
     bindEvents();
     syncReaderToolStates();

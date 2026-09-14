@@ -1,7 +1,7 @@
 {
   "name": "Marginalia - 电子书划线笔记",
   "short_name": "Marginalia",
-  "description": "EPUB 阅读器，支持划线、笔记、本地同步和创作导出",
+  "description": "EPUB 阅读器，支持划线感悟、标签、书签进度同步和笔记导出",
   "start_url": ".",
   "display": "standalone",
   "orientation": "any",

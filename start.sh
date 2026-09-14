@@ -38,7 +38,7 @@ if [[ ! -f "$PROJECT_ROOT/.env" ]]; then
     cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
 fi
 
-if ! "$VENV_PYTHON" -c 'import fastapi, ebooklib, bs4, multipart, pytest' 2>/dev/null; then
+if ! "$VENV_PYTHON" -c 'import fastapi, uvicorn, pydantic, aiosqlite, dotenv, ebooklib, bs4, httpx, multipart, pytest' 2>/dev/null; then
     echo "[INFO] Installing dependencies into .venv..."
     "$VENV_PYTHON" -m pip install -r "$PROJECT_ROOT/backend/requirements.txt"
 fi
