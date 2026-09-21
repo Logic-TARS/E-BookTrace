@@ -501,25 +501,39 @@
 
   function applyCurrentRoute() {
     const route = getRouteFromHash();
-    routeTransition = routeTransition.then(() => transitionToRoute(route));
-    return routeTransition;
+    const transition = routeTransition.then(() => transitionToRoute(route));
+    routeTransition = transition.catch(() => {});
+    return transition;
   }
 
   async function transitionToRoute(route) {
+    const requestedRoute = route;
     if (route === '/reader' && !currentBookMeta) {
-      history.replaceState({}, '', '#/');
       route = '/';
     }
-    if (route === currentRoute) return;
+    if (route === currentRoute) {
+      if (requestedRoute !== route) history.replaceState({}, '', '#/');
+      return;
+    }
 
     const previousRoute = currentRoute;
-    currentRoute = route;
-    if (previousRoute === '/reader' && route !== '/reader') {
-      await leaveReader();
-    }
-    renderRoute(route);
-    if (route === '/') {
-      await renderLibrary();
+    try {
+      if (previousRoute === '/reader' && route !== '/reader') {
+        await leaveReader();
+      }
+      renderRoute(route);
+      if (route === '/') {
+        await renderLibrary();
+      }
+      if (requestedRoute !== route) history.replaceState({}, '', '#/');
+      currentRoute = route;
+    } catch (err) {
+      const previousHash = `#${previousRoute || '/'}`;
+      history.replaceState({}, '', previousHash);
+      renderRoute(previousRoute || '/');
+      console.error('Route transition failed:', err);
+      showToast('页面切换失败，请重试', 'error');
+      throw err;
     }
   }
 

@@ -86,6 +86,61 @@ test.describe('notes management shell', () => {
     await expect.poll(() => page.evaluate(() => window.__progressQueuePuts)).toBe(1);
   });
 
+  test('route queue recovers after a failed reader lifecycle', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__failNextBookPut = false;
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value, ...args) {
+        if (this.name === 'books' && window.__failNextBookPut) {
+          window.__failNextBookPut = false;
+          throw new DOMException('forced route lifecycle failure', 'UnknownError');
+        }
+        return put.call(this, value, ...args);
+      };
+    });
+    await installNotesApiRoutes(page, { notes: [] });
+    await page.goto('/#/');
+    await page.evaluate(async databaseVersion => {
+      const fileBlob = await fetch('/tests/fixtures/multichapter.epub').then(response => response.arrayBuffer());
+      await new Promise((resolve, reject) => {
+        const request = indexedDB.open('marginalia', databaseVersion);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction('books', 'readwrite');
+          transaction.objectStore('books').put({
+            id: 'failing-reader-book',
+            book_title: 'Failing Reader',
+            book_author: 'Test Author',
+            file_blob: fileBlob,
+            progress_percent: 0,
+            last_opened: Date.now(),
+          });
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          transaction.onerror = () => reject(transaction.error);
+        };
+      });
+    }, INDEXED_DB_VERSION);
+    await page.reload();
+    await page.getByText('Failing Reader', { exact: true }).click();
+    await expect(page.locator('#toolbar-book-title')).toHaveText('Failing Reader', { timeout: 15_000 });
+    await expect(page).toHaveURL(/#\/reader$/);
+
+    await page.evaluate(() => { window.__failNextBookPut = true; });
+    await page.locator('#btn-nav-create').click();
+    await expect(page.locator('#toast')).toContainText('页面切换失败');
+    await expect(page).toHaveURL(/#\/reader$/);
+    await expect(page.locator('#reader-view')).toHaveClass(/active/);
+
+    await page.locator('#btn-nav-create').click();
+    await expect(page).toHaveURL(/#\/creation$/);
+    await expect(page.locator('#creation-view')).toHaveClass(/active/);
+    await expect(page.locator('#reader-view')).not.toHaveClass(/active/);
+  });
+
   test('reader route without an open book falls back to library', async ({ page }) => {
     await installNotesApiRoutes(page, { notes: [] });
     await page.goto('/#/reader');

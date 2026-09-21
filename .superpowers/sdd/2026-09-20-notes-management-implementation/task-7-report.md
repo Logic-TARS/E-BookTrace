@@ -69,3 +69,19 @@
 - `npm test -- tests/import-ux.spec.js`：`3 passed`。
 - `node --check app.js && node --check tests/helpers/notes-management.mjs && node --check tests/notes-management.spec.js && git diff --check`：通过。
 - 死 selector 搜索 `draft-actions|reflection-actions`：无匹配。
+
+## 修复轮 2/5
+
+- 路由队列现在分别保留调用者可观察的 `transition` 与内部恢复后的 `routeTransition`；单次转换 reject 会向调用者暴露，同时内部队列通过 catch 恢复，后续请求仍可执行。
+- `transitionToRoute()` 仅在 reader 离开、目标 view 渲染和书库渲染全部成功后提交 `currentRoute`。
+- 转换失败时恢复到上一条已提交路由的 hash 与顶级 view，并通过 error toast 与 console error 暴露失败；不会留下 hash/view/currentRoute 分裂状态。
+- 保留修复轮 1 的同路由去重：重复 `popstate`/`hashchange` 仍不会重复 reader 离开生命周期。
+
+### 修复轮 TDD 与测试
+
+- 新增 `route queue recovers after a failed reader lifecycle`：首轮通过 IndexedDB hook 强制 reader 保存进度失败，验证错误可见且恢复为 `#/reader`/reader view；再次导航成功进入 `#/creation`。修复前 RED 为找不到“页面切换失败”且队列保持 rejected；修复后 `1 passed`。
+- `npm test -- tests/notes-management.spec.js --grep "route queue recovers|one history navigation|reader route without"`：`3 passed`。
+- `npm test -- tests/notes-management.spec.js --grep "creation route|history|reader hint|route queue"`：`6 passed`。
+- `npm test -- tests/import-ux.spec.js`：`3 passed`。
+- `npm test -- tests/mobile-layout.spec.js --grep "workspace|creation|exact highlight|uses a full-height reader|turns exactly one page"`：`4 passed`。
+- `node --check app.js && node --check tests/notes-management.spec.js && git diff --check`：通过。
