@@ -320,21 +320,31 @@ test.describe('notes management shell', () => {
     await expect(page.getByText('单击跳回原文，双击编辑感悟')).toHaveCount(0);
   });
 
-  test('creation route upgrades IndexedDB to v6 without deleting old stores', async ({ page }) => {
+  test('creation route upgrades IndexedDB from v5 to v6 without deleting old stores or data', async ({ page }) => {
     await installNotesApiRoutes(page, { notes: [] });
+    await page.goto('/manifest.json');
     await page.evaluate(databaseName => new Promise((resolve, reject) => {
       const deleteRequest = indexedDB.deleteDatabase(databaseName);
       deleteRequest.onerror = () => reject(deleteRequest.error);
+      deleteRequest.onblocked = () => reject(new Error('database delete was blocked'));
       deleteRequest.onsuccess = () => {
-        const openRequest = indexedDB.open(databaseName, INDEXED_DB_VERSION);
+        const openRequest = indexedDB.open(databaseName, 5);
         openRequest.onupgradeneeded = () => {
           const database = openRequest.result;
-          database.createObjectStore('legacy_notes', { keyPath: 'id' }).put({ id: 'legacy-1' });
+          const transaction = openRequest.transaction;
+          database.createObjectStore('legacy_notes', { keyPath: 'id' }).put({ id: 'legacy-1', text: 'legacy' });
+          database.createObjectStore('books', { keyPath: 'id' });
+          database.createObjectStore('highlights', { keyPath: 'id' });
+          database.createObjectStore('bookmarks', { keyPath: 'id' });
+          transaction.oncomplete = () => {};
         };
         openRequest.onerror = () => reject(openRequest.error);
         openRequest.onsuccess = () => {
-          openRequest.result.close();
-          resolve();
+          const database = openRequest.result;
+          const transaction = database.transaction('legacy_notes', 'readwrite');
+          transaction.objectStore('legacy_notes').put({ id: 'legacy-1', text: 'legacy' });
+          transaction.oncomplete = () => { database.close(); resolve(); };
+          transaction.onerror = () => reject(transaction.error);
         };
       };
     }), INDEXED_DB_NAME);
@@ -345,23 +355,24 @@ test.describe('notes management shell', () => {
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const database = request.result;
-        const state = {
-          version: database.version,
-          stores: Array.from(database.objectStoreNames),
+        const transaction = database.transaction('legacy_notes', 'readonly');
+        const legacyRequest = transaction.objectStore('legacy_notes').get('legacy-1');
+        transaction.oncomplete = () => {
+          resolve({
+            version: database.version,
+            stores: Array.from(database.objectStoreNames),
+            legacy: legacyRequest.result,
+          });
+          database.close();
         };
-        database.close();
-        resolve(state);
+        transaction.onerror = () => reject(transaction.error);
       };
     }), INDEXED_DB_NAME);
 
     expect(databaseState.version).toBe(INDEXED_DB_VERSION);
+    expect(databaseState.legacy).toEqual({ id: 'legacy-1', text: 'legacy' });
     expect(databaseState.stores).toEqual(expect.arrayContaining([
-      'legacy_notes',
-      'books',
-      'highlights',
-      'deleted_highlights',
-      'bookmarks',
-      'sync_queue',
+      'legacy_notes', 'books', 'highlights', 'deleted_highlights', 'bookmarks', 'sync_queue',
     ]));
   });
 });

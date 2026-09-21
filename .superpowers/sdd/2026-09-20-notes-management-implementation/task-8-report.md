@@ -1,26 +1,24 @@
 # Task 8 报告：在线查询、离线回退、筛选、分页与待同步视图
 
 ## 状态
-修复轮 4/5 已提交。
+修复轮 5/5（最终）已完成并提交。
 
-## 提交
-`849a5c8 Fix offline trash filtering and migration fixture`
+## 最终提交
+`dc5ec61 Make IndexedDB upgrade regression stable`
 
-## 本轮实现
-- `applyServerBookState()` 改为基于本地记录、服务器快照和 sync_queue 的 aliases（server_id/client_id/local id）协调；pending upsert/trash/restore/delete 不被旧服务器快照清理或覆盖，queued 状态随后重放。
-- 离线搜索补充书名、作者、章节；本地 tags 使用 AND；支持书籍、颜色、类型、回收站和多种排序；离线 facets 从匹配集计算。
-- 所有审查到的本地 highlights 读取路径排除 `deleted_at`，包括计数、reader notes、视觉恢复、问答上下文、合并/迁移来源。
-- 保留 `loadNotesManagement({ preserveDetail })` hook，并记录 managedNoteKey/draftState 数据属性供 Task 9 使用。
-- AI QA 与 notes migration 直接 IndexedDB 打开统一为 v6，并使用 static origin seed/reload。
+## 本轮变更
+- migration 回归恢复真正的 v5 → v6 流程：先创建 v5 old stores 与 `legacy_notes` 数据，再由应用打开并升级到 DB_VERSION 6；断言版本、旧数据、旧 stores 与新 stores 均保留。
+- migration fixture 在静态 origin 上完成明确关闭连接，避免 deleteDatabase 被应用连接阻塞或超时。
+- 保留 Task 8 的离线 trash 过滤语义、pending 视图合并、preserveDetail hook；未实现 Task 9/10/11。
 
-## 精确测试结果
-- `node --check frontend/app.js`：通过。
-- `git diff --check`：通过。
-- `npm test -- tests/notes-management.spec.js`：本轮运行 13 passed、1 failed（migration fixture deleteDatabase timeout，修复后尚未重新取得完整结果）。
+## 最终精确测试结果
+- `npm test -- tests/notes-management.spec.js`：14 passed。
 - `npm test -- tests/ai-qa.spec.js`：4 passed。
 - `npm test -- tests/server-sync.spec.js`：1 passed。
 - `npm test -- tests/mobile-layout.spec.js`：11 passed。
+- `node --check frontend/app.js`：通过。
+- `git diff --check`：通过。
 
 ## 关注点
-- notes migration fixture 已切换到无应用连接页面后执行 deleteDatabase，保留 v6/legacy stores 验证意图；需完整重跑确认超时已消失。
-- 本轮未实现详情编辑、批量 API 客户端或 Markdown UI。
+- Playwright static HTTP server 日志中的 `/api/*` 404/501 是未安装后端 mock 的既有请求，不影响各测试结果。
+- 未实现详情编辑、批量 API 客户端或 Markdown UI。
