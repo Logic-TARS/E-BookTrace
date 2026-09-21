@@ -2,7 +2,7 @@
 
 ## 状态
 
-最终统一修复波次已实现并提交于 `4b9f0ec`。本轮修正排序、颜色与 facets 契约，补齐在线 batch 的 IndexedDB 持久更新、pending trash/restore 视图语义和所有 identity aliases 清理。
+最终统一修复波次已实现；本轮补充提交为 `4f7e4ee`，报告更新提交为 `cd4fbff`。本轮修正排序、颜色与 facets 契约，补齐在线 batch 的 IndexedDB 持久更新、pending trash/restore 视图语义和所有 identity aliases 清理。
 
 ## 实现摘要
 
@@ -19,6 +19,7 @@
 
 通过：
 
+- `cd frontend && npm test -- tests/notes-management.spec.js --grep "online batch (trash|restore) reconciles"`：2 passed（本轮新增 alias 场景）。
 - `cd frontend && npm test -- tests/notes-management.spec.js`：42 passed（含本轮 alias 场景）。
 - `cd frontend && npm test -- tests/server-sync.spec.js`：4 passed。
 - `cd frontend && npm test -- tests/mobile-layout.spec.js --project=mobile-chromium`：12 passed。
@@ -37,7 +38,7 @@
 
 ## 变更文件
 
-`AGENTS.md`、`DESIGN.md`、`PRODUCT.md`、`README.md`、`backend/database.py`、`backend/notes.py`、`frontend/app.js`、`frontend/index.html`、`frontend/style.css`、`frontend/sw.js`、`frontend/tests/mobile-layout.spec.js`、`frontend/tests/notes-management.spec.js`。
+`AGENTS.md`、`DESIGN.md`、`PRODUCT.md`、`README.md`、`backend/database.py`、`backend/notes.py`、`frontend/app.js`、`frontend/index.html`、`frontend/style.css`、`frontend/sw.js`、`frontend/tests/mobile-layout.spec.js`、`frontend/tests/notes-management.spec.js`、`.superpowers/sdd/2026-09-20-notes-management-implementation/task-11-report.md`。
 
 ## 隔离同源验收状态
 
@@ -53,7 +54,7 @@
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
 - `git diff --check`：通过。
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
-- 本轮最终 commit：`4b9f0ec`。
+- 本轮最终 commit：`cd4fbff`。
 
 ## 额外说明
 
