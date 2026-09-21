@@ -291,9 +291,7 @@ body.reader-chrome-hidden .app-nav {
 }
 
 .library-actions,
-.creation-actions,
-.draft-actions,
-.reflection-actions {
+.creation-actions {
   display: flex;
   align-items: center;
   gap: 10px;

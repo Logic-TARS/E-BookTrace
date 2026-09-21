@@ -33,6 +33,59 @@ test.describe('notes management shell', () => {
     await expect(page.locator('#creation-view')).toHaveClass(/active/);
   });
 
+  test('one history navigation leaves reader once', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__progressQueuePuts = 0;
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value, ...args) {
+        if (this.name === 'sync_queue' && value?.type === 'progress.set') {
+          window.__progressQueuePuts += 1;
+        }
+        return put.call(this, value, ...args);
+      };
+    });
+    await installNotesApiRoutes(page, { notes: [] });
+    await page.goto('/#/');
+    await page.evaluate(async databaseVersion => {
+      const fileBlob = await fetch('/tests/fixtures/multichapter.epub').then(response => response.arrayBuffer());
+      await new Promise((resolve, reject) => {
+        const request = indexedDB.open('marginalia', databaseVersion);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction('books', 'readwrite');
+          transaction.objectStore('books').put({
+            id: 'server-reader-book',
+            server_book_id: 'server-reader-book',
+            source: 'server',
+            _source: 'server',
+            book_title: 'History Reader',
+            book_author: 'Test Author',
+            filename: 'history-reader.epub',
+            file_blob: fileBlob,
+            progress_percent: 0,
+            last_opened: Date.now(),
+          });
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          transaction.onerror = () => reject(transaction.error);
+        };
+      });
+    }, INDEXED_DB_VERSION);
+    await page.reload();
+    await page.getByText('History Reader').click();
+    await expect(page.locator('#toolbar-book-title')).toHaveText('History Reader', { timeout: 15_000 });
+    await expect(page).toHaveURL(/#\/reader$/);
+
+    await page.evaluate(() => { window.__progressQueuePuts = 0; });
+    await page.goBack();
+    await expect(page).toHaveURL(/#\/$/);
+    await expect(page.locator('#library-view')).toHaveClass(/active/);
+    await expect.poll(() => page.evaluate(() => window.__progressQueuePuts)).toBe(1);
+  });
+
   test('reader route without an open book falls back to library', async ({ page }) => {
     await installNotesApiRoutes(page, { notes: [] });
     await page.goto('/#/reader');

@@ -142,15 +142,32 @@ export async function installNotesApiRoutes(page, state = {}) {
     const request = route.request();
     const url = new URL(request.url());
     const method = request.method();
+    let body = null;
+    if (request.postData() && request.headers()['content-type']?.includes('application/json')) {
+      body = request.postDataJSON();
+    }
     state.requests.push({
       method,
       pathname: url.pathname,
       search: url.search,
-      body: request.postDataJSON?.() ?? null,
+      body,
     });
 
     if (url.pathname === '/api/books' && method === 'GET') {
       await route.fulfill({ json: { books: state.books } });
+      return;
+    }
+
+    if (/^\/api\/books\/[^/]+\/sync$/.test(url.pathname) && method === 'GET') {
+      await route.fulfill({
+        json: {
+          book_id: decodeURIComponent(url.pathname.split('/')[3]),
+          revision: 0,
+          progress: null,
+          bookmarks: [],
+          highlights: state.notes,
+        },
+      });
       return;
     }
 

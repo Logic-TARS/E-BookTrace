@@ -50,3 +50,22 @@
 
 - 页面控件当前为静态 shell，除顶级导航外未绑定查询、导出、编辑、回收站或批量行为；这些明确留给 Task 8 及后续任务。
 - 本机 Playwright 配置中的 webServer 相对路径与当前 worktree 层级不匹配；验证时使用仓库根 `.venv` 手动启动 `python -m http.server 8099`，测试本身均通过。
+
+## 修复轮 1/5
+
+- 将 `applyCurrentRoute()` 收窄为读取 hash 并串行调度路由转换；`transitionToRoute()` 以 `currentRoute` 去重，同一路由的 `popstate`/`hashchange` 重复通知不再重复生命周期。
+- 将 reader 离开时的保存进度、同步入队、销毁 EPUB 和状态清理拆到 `leaveReader()`，只在路由从 `/reader` 离开时执行一次；`renderRoute()` 只切换顶级 view 及对应导航 UI。
+- `openBook()` 仅通过 `navigateToRoute('/reader')` 应用 reader view，不再额外调用 view 更新函数。
+- 清理已无 DOM 使用的 `.draft-actions`、`.reflection-actions` CSS selector。
+- 测试 helper 只对 JSON 请求解析 `postDataJSON()`，并补充 book sync GET mock，以支持真实 reader history 回归。
+
+### 修复轮 TDD 与测试
+
+- 新增 `one history navigation leaves reader once`：通过拦截真实 IndexedDB `sync_queue.put()`，验证一次 browser history 离开 reader 只写入一次 `progress.set`。修复前 RED 为 `Expected: 1, Received: 2`；修复后 `1 passed`。
+- `npm test -- tests/notes-management.spec.js --grep "creation route|history|reader hint"`：`5 passed`。
+- `npm test -- tests/mobile-layout.spec.js --grep "workspace|creation"`：`1 passed`。
+- `npm test -- tests/mobile-layout.spec.js --grep "exact highlight"`：`1 passed`。
+- `npm test -- tests/mobile-layout.spec.js --grep "exact highlight|uses a full-height reader|turns exactly one page"`：`3 passed`。
+- `npm test -- tests/import-ux.spec.js`：`3 passed`。
+- `node --check app.js && node --check tests/helpers/notes-management.mjs && node --check tests/notes-management.spec.js && git diff --check`：通过。
+- 死 selector 搜索 `draft-actions|reflection-actions`：无匹配。

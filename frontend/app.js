@@ -79,6 +79,8 @@
   let readerChromeHideTimer = null;
   let readerChromeLayoutTimer = null;
   let readerIframeObserver = null;
+  let currentRoute = null;
+  let routeTransition = Promise.resolve();
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -478,17 +480,6 @@
     await navigateToRoute('/');
   }
 
-  function showReader() {
-    dom.libraryView.classList.remove('active');
-    dom.readerView.classList.add('active');
-    dom.creationView.classList.remove('active');
-    setReaderChromeVisible(true);
-    setActiveNav('read');
-    syncReaderToolStates();
-    syncReaderPanelBackdrop();
-    if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
-  }
-
   async function showCreation() {
     await navigateToRoute('/creation');
   }
@@ -508,27 +499,55 @@
     await applyCurrentRoute();
   }
 
-  async function applyCurrentRoute() {
-    let route = getRouteFromHash();
-    if (route === '/reader') {
-      if (currentBookMeta) {
-        showReader();
-        return;
-      }
+  function applyCurrentRoute() {
+    const route = getRouteFromHash();
+    routeTransition = routeTransition.then(() => transitionToRoute(route));
+    return routeTransition;
+  }
+
+  async function transitionToRoute(route) {
+    if (route === '/reader' && !currentBookMeta) {
       history.replaceState({}, '', '#/');
       route = '/';
     }
-    if (route === '/creation') {
-      dom.libraryView.classList.remove('active');
-      dom.readerView.classList.remove('active');
-      dom.creationView.classList.add('active');
-      resetReaderChrome();
-      closeMobileReaderPanels();
+    if (route === currentRoute) return;
+
+    const previousRoute = currentRoute;
+    currentRoute = route;
+    if (previousRoute === '/reader' && route !== '/reader') {
+      await leaveReader();
+    }
+    renderRoute(route);
+    if (route === '/') {
+      await renderLibrary();
+    }
+  }
+
+  function renderRoute(route) {
+    dom.libraryView.classList.toggle('active', route === '/');
+    dom.readerView.classList.toggle('active', route === '/reader');
+    dom.creationView.classList.toggle('active', route === '/creation');
+    if (route === '/reader') {
+      setReaderChromeVisible(true);
+      setActiveNav('read');
+      syncReaderToolStates();
       syncReaderPanelBackdrop();
-      setActiveNav('create');
+      if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
       return;
     }
 
+    resetReaderChrome();
+    closeMobileReaderPanels();
+    syncReaderPanelBackdrop();
+    setActiveNav(route === '/creation' ? 'create' : 'library');
+    if (route === '/') {
+      setReaderToolsOpen(false);
+      hideReaderLoading();
+      hideSelectionToolbar();
+    }
+  }
+
+  async function leaveReader() {
     await saveCurrentProgress();
     if (currentRendition) {
       try { currentRendition.destroy(); } catch (_e) { /* already destroyed */ }
@@ -549,25 +568,11 @@
     _boundIframeDocuments = new WeakSet();
     locationsReadyPromise = null;
     locationsReadyBook = null;
-    dom.libraryView.classList.add('active');
-    dom.readerView.classList.remove('active');
-    dom.creationView.classList.remove('active');
-    resetReaderChrome();
-    closeMobileReaderPanels();
-    syncReaderPanelBackdrop();
-    setActiveNav('library');
-    setReaderToolsOpen(false);
-    hideReaderLoading();
-    hideSelectionToolbar();
     if (currentBookUrl) {
       URL.revokeObjectURL(currentBookUrl);
       currentBookUrl = null;
     }
     currentBookMeta = null;
-    await renderLibrary();
-    if (route !== '/') {
-      history.replaceState({}, '', '#/');
-    }
   }
 
   function setActiveNav(target) {
@@ -1738,7 +1743,6 @@
   async function openBook(bookMeta, { skipSync = false } = {}) {
     currentBookMeta = bookMeta;
     await navigateToRoute('/reader');
-    showReader();
     setReaderLoading('正在打开书籍…', '正在准备阅读器');
     setLoadingProgress(5);
     const isServerBook = Boolean(
