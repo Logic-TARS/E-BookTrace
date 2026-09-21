@@ -617,11 +617,16 @@ async def get_server_book_sync(book_id: str):
 
 @app.post("/api/books/{book_id}/sync")
 async def sync_server_book(book_id: str, request: BookSyncRequest):
-    from library import sync_book_state
+    from library import ReaderSyncConflict, sync_book_state
 
-    return await sync_book_state(
-        book_id, [operation.model_dump() for operation in request.operations]
-    )
+    try:
+        return await sync_book_state(
+            book_id,
+            [operation.model_dump() for operation in request.operations],
+            protocol_version=request.protocol_version,
+        )
+    except ReaderSyncConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.delete("/api/books/{book_id}")

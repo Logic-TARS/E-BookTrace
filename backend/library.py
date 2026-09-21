@@ -388,7 +388,15 @@ async def get_book_state(book_id: str) -> dict:
         await db.close()
 
 
-async def sync_book_state(book_id: str, operations: list[dict]) -> dict:
+class ReaderSyncConflict(Exception):
+    """A reader sync operation conflicts with canonical server state."""
+
+
+async def sync_book_state(
+    book_id: str,
+    operations: list[dict],
+    protocol_version: int | None = None,
+) -> dict:
     """Apply idempotent reader operations, then return the canonical snapshot."""
     db = await _connect()
     try:
@@ -409,6 +417,8 @@ async def sync_book_state(book_id: str, operations: list[dict]) -> dict:
                 "bookmark.upsert",
                 "bookmark.delete",
                 "highlight.upsert",
+                "highlight.trash",
+                "highlight.restore",
                 "highlight.delete",
             }:
                 raise HTTPException(status_code=422, detail="Invalid sync operation")
@@ -471,12 +481,19 @@ async def sync_book_state(book_id: str, operations: list[dict]) -> dict:
                 )
             elif operation_type == "highlight.upsert":
                 await _upsert_synced_highlight(db, book, entity_id, payload, now)
+            elif operation_type == "highlight.trash":
+                await _trash_synced_highlight(db, book_id, entity_id, now)
+            elif operation_type == "highlight.restore":
+                await _restore_synced_highlight(db, book_id, entity_id, now)
             elif operation_type == "highlight.delete":
-                await db.execute(
-                    "DELETE FROM highlights WHERE book_id = ? "
-                    "AND (id = ? OR client_id = ?)",
-                    (book_id, entity_id, entity_id),
-                )
+                if protocol_version is not None and protocol_version >= 2:
+                    await _delete_trashed_synced_highlight(db, book_id, entity_id)
+                else:
+                    await db.execute(
+                        "DELETE FROM highlights WHERE book_id = ? "
+                        "AND (id = ? OR client_id = ?)",
+                        (book_id, entity_id, entity_id),
+                    )
             await db.execute(
                 "INSERT INTO reader_sync_operations "
                 "(op_id, book_id, operation_type, received_at) VALUES (?, ?, ?, ?)",
@@ -545,11 +562,57 @@ async def _upsert_synced_highlight(
             INSERT INTO highlights
                 (book_id, client_id, book_title, book_author, chapter, cfi,
                  highlight_text, note, tags, color, created_at, progress_percent,
-                 received_at, updated_at, status, knowledge_book_id, id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 received_at, updated_at, status, knowledge_book_id, deleted_at, id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
             """,
             (*values, str(uuid.uuid4())),
         )
+
+
+async def _trash_synced_highlight(
+    db: aiosqlite.Connection,
+    book_id: str,
+    entity_id: str,
+    now: str,
+) -> None:
+    await db.execute(
+        "UPDATE highlights SET deleted_at = ?, updated_at = ? "
+        "WHERE book_id = ? AND (id = ? OR client_id = ?)",
+        (now, now, book_id, entity_id, entity_id),
+    )
+
+
+async def _restore_synced_highlight(
+    db: aiosqlite.Connection,
+    book_id: str,
+    entity_id: str,
+    now: str,
+) -> None:
+    await db.execute(
+        "UPDATE highlights SET deleted_at = NULL, updated_at = ? "
+        "WHERE book_id = ? AND (id = ? OR client_id = ?)",
+        (now, book_id, entity_id, entity_id),
+    )
+
+
+async def _delete_trashed_synced_highlight(
+    db: aiosqlite.Connection,
+    book_id: str,
+    entity_id: str,
+) -> None:
+    rows = await db.execute_fetchall(
+        "SELECT deleted_at FROM highlights WHERE book_id = ? "
+        "AND (id = ? OR client_id = ?)",
+        (book_id, entity_id, entity_id),
+    )
+    if not rows:
+        return
+    if rows[0]["deleted_at"] is None:
+        raise ReaderSyncConflict("Active highlights must be trashed before deletion")
+    await db.execute(
+        "DELETE FROM highlights WHERE book_id = ? AND (id = ? OR client_id = ?)",
+        (book_id, entity_id, entity_id),
+    )
 
 
 def _highlight_to_dict(row: aiosqlite.Row) -> dict:
