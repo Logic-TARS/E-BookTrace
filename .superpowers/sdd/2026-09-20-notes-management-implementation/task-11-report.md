@@ -2,7 +2,7 @@
 
 ## 状态
 
-最终统一修复波次已实现；本轮补充提交为 `4f7e4ee`，报告更新提交为 `cd4fbff`。本轮修正排序、颜色与 facets 契约，补齐在线 batch 的 IndexedDB 持久更新、pending trash/restore 视图语义和所有 identity aliases 清理。
+最终统一修复波次已实现；本轮补充提交为 `4f7e4ee`，当前最终 HEAD 为 `70de65a`。本轮修正排序、颜色与 facets 契约，补齐在线 batch 的 IndexedDB 持久更新、pending trash/restore 视图语义和所有 identity aliases 清理。
 
 ## 实现摘要
 
@@ -32,7 +32,8 @@
 
 ## 关注点
 
-- 真实同源验收尚未取得最终下载文件读取证据；其余永久删除、双 context UI/API/IDB 清理和重复删除步骤已执行。
+- Blocker：frontend 70/71（全套 frontend 测试为 70 passed、1 个既有 AI citation 跳转测试失败；静态服务器收到 sync 501 后仍停留 Chapter 1）。
+- Blocker：真实 Markdown 文件内容未读取；真实同源验收尚未取得最终下载文件读取证据。其余永久删除、双 context UI/API/IDB 清理和重复删除步骤已执行。
 - 本次没有新增或提交敏感文件、EPUB、SQLite、`.env` 或测试产物。
 - 报告按要求保存在本文件。
 
@@ -54,7 +55,7 @@
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
 - `git diff --check`：通过。
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
-- 本轮最终 commit：`cd4fbff`。
+- 当前最终 HEAD：`70de65a`。
 
 ## 额外说明
 

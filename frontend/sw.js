@@ -76,7 +76,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // API calls: network-first (don't cache)
+  // API calls: network-only; failures return 503 JSON (don't cache)
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(event.request).catch(() => {
