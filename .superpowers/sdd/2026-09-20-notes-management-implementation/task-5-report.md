@@ -52,3 +52,16 @@
 - 快照使用 `SELECT * FROM highlights WHERE book_id = ?`，没有 `deleted_at` 过滤，测试同时验证 active 与 trash 可见。
 - 未改变整书删除实现，也未触碰旧 `/api/highlights/{id}` 永久删除行为。
 - 提交消息：`Add recoverable highlight sync operations`；最终提交哈希见交付回复。
+
+## 修复轮 1/5：同步实体跨字段碰撞
+
+- 修复 finding：旧实现用 `(id = ? OR client_id = ?)` 直接更新或删除，当一个 `entity_id` 同时等于记录 A 的 `id` 和记录 B 的 `client_id` 时会命中两条记录。
+- 新增 `_resolve_synced_highlight_id()`，在同书范围内按“精确 `id` 优先，其次 `client_id`”解析并 `LIMIT 1`；trash、restore、v2 delete 后续只按解析出的主键 `id` 操作单条记录。
+- v2 delete 只检查解析目标的 `deleted_at`：目标为 active 时返回 409；目标为 trash 时只永久删除该目标，不影响跨字段碰撞记录。
+- 严格 TDD：先加入跨字段碰撞测试，RED 为 `3 failed, 25 deselected, 1 warning`，分别证明 trash、restore、delete 会错误影响两条记录；实现后 GREEN 为 `3 passed, 25 deselected, 1 warning`。active 目标 409 的碰撞测试在旧代码下已满足响应断言，因此未计入 RED 选择集，保留作额外回归。
+- 修复轮验证命令与精确结果：
+  - `python -m pytest backend/tests/test_notes_api.py -k "sync_protocol or legacy_sync" -q`
+    - 最终复跑：`11 passed, 17 deselected, 1 warning in 2.31s`
+  - `python -m pytest backend/tests/test_api.py -k "cross_device_state_sync_is_idempotent or delete_removes_file_and_reader_state" -q`
+    - 最终复跑：`2 passed, 37 deselected, 1 warning in 1.05s`
+- 本轮只修改同步实体解析、对应协议测试和本报告；旧协议 delete、整书删除及其他同步语义未改。

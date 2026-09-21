@@ -569,17 +569,32 @@ async def _upsert_synced_highlight(
         )
 
 
+async def _resolve_synced_highlight_id(
+    db: aiosqlite.Connection,
+    book_id: str,
+    entity_id: str,
+) -> aiosqlite.Row | None:
+    rows = await db.execute_fetchall(
+        "SELECT id, deleted_at FROM highlights WHERE book_id = ? "
+        "AND (id = ? OR client_id = ?) "
+        "ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1",
+        (book_id, entity_id, entity_id, entity_id),
+    )
+    return rows[0] if rows else None
+
+
 async def _trash_synced_highlight(
     db: aiosqlite.Connection,
     book_id: str,
     entity_id: str,
     now: str,
 ) -> None:
-    await db.execute(
-        "UPDATE highlights SET deleted_at = ?, updated_at = ? "
-        "WHERE book_id = ? AND (id = ? OR client_id = ?)",
-        (now, now, book_id, entity_id, entity_id),
-    )
+    target = await _resolve_synced_highlight_id(db, book_id, entity_id)
+    if target:
+        await db.execute(
+            "UPDATE highlights SET deleted_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, target["id"]),
+        )
 
 
 async def _restore_synced_highlight(
@@ -588,11 +603,12 @@ async def _restore_synced_highlight(
     entity_id: str,
     now: str,
 ) -> None:
-    await db.execute(
-        "UPDATE highlights SET deleted_at = NULL, updated_at = ? "
-        "WHERE book_id = ? AND (id = ? OR client_id = ?)",
-        (now, book_id, entity_id, entity_id),
-    )
+    target = await _resolve_synced_highlight_id(db, book_id, entity_id)
+    if target:
+        await db.execute(
+            "UPDATE highlights SET deleted_at = NULL, updated_at = ? WHERE id = ?",
+            (now, target["id"]),
+        )
 
 
 async def _delete_trashed_synced_highlight(
@@ -600,19 +616,12 @@ async def _delete_trashed_synced_highlight(
     book_id: str,
     entity_id: str,
 ) -> None:
-    rows = await db.execute_fetchall(
-        "SELECT deleted_at FROM highlights WHERE book_id = ? "
-        "AND (id = ? OR client_id = ?)",
-        (book_id, entity_id, entity_id),
-    )
-    if not rows:
+    target = await _resolve_synced_highlight_id(db, book_id, entity_id)
+    if not target:
         return
-    if rows[0]["deleted_at"] is None:
+    if target["deleted_at"] is None:
         raise ReaderSyncConflict("Active highlights must be trashed before deletion")
-    await db.execute(
-        "DELETE FROM highlights WHERE book_id = ? AND (id = ? OR client_id = ?)",
-        (book_id, entity_id, entity_id),
-    )
+    await db.execute("DELETE FROM highlights WHERE id = ?", (target["id"],))
 
 
 def _highlight_to_dict(row: aiosqlite.Row) -> dict:

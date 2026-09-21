@@ -645,6 +645,160 @@ def test_sync_protocol_v2_rejects_active_delete_after_trashing_another_note(
     assert highlights[active_note["client_id"]]["deleted_at"] is None
 
 
+def _seed_cross_field_collision(notes_db, book_id, *, id_target_deleted_at=None):
+    connection = sqlite3.connect(notes_db)
+    connection.executemany(
+        """
+        INSERT INTO highlights (
+            id, client_id, book_id, book_title, highlight_text,
+            tags, created_at, received_at, updated_at, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, '[]', ?, ?, ?, ?)
+        """,
+        [
+            (
+                "collision-key",
+                "id-target-client",
+                book_id,
+                "同步测试",
+                "ID target",
+                "2026-09-20T00:00:00+00:00",
+                "2026-09-20T00:00:00+00:00",
+                "2026-09-20T00:00:00+00:00",
+                id_target_deleted_at,
+            ),
+            (
+                "client-target-id",
+                "collision-key",
+                book_id,
+                "同步测试",
+                "Client target",
+                "2026-09-20T00:00:00+00:00",
+                "2026-09-20T00:00:00+00:00",
+                "2026-09-20T00:00:00+00:00",
+                None,
+            ),
+        ],
+    )
+    connection.commit()
+    connection.close()
+
+
+def test_sync_protocol_v2_trash_prefers_exact_id_on_cross_field_collision(
+    client, notes_db, uploaded_book
+):
+    _seed_cross_field_collision(notes_db, uploaded_book["id"])
+
+    response = client.post(
+        f"/api/books/{uploaded_book['id']}/sync",
+        json={
+            "protocol_version": 2,
+            "operations": [
+                {
+                    "op_id": "trash-cross-field-collision",
+                    "type": "highlight.trash",
+                    "entity_id": "collision-key",
+                    "payload": {},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    highlights = {item["id"]: item for item in response.json()["highlights"]}
+    assert highlights["collision-key"]["deleted_at"] is not None
+    assert highlights["client-target-id"]["deleted_at"] is None
+
+
+def test_sync_protocol_v2_restore_prefers_exact_id_on_cross_field_collision(
+    client, notes_db, uploaded_book
+):
+    _seed_cross_field_collision(
+        notes_db,
+        uploaded_book["id"],
+        id_target_deleted_at="2026-09-20T01:00:00+00:00",
+    )
+
+    response = client.post(
+        f"/api/books/{uploaded_book['id']}/sync",
+        json={
+            "protocol_version": 2,
+            "operations": [
+                {
+                    "op_id": "restore-cross-field-collision",
+                    "type": "highlight.restore",
+                    "entity_id": "collision-key",
+                    "payload": {},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    highlights = {item["id"]: item for item in response.json()["highlights"]}
+    assert highlights["collision-key"]["deleted_at"] is None
+    assert highlights["client-target-id"]["deleted_at"] is None
+    assert highlights["client-target-id"]["updated_at"] == "2026-09-20T00:00:00+00:00"
+
+
+def test_sync_protocol_v2_delete_only_removes_exact_id_on_cross_field_collision(
+    client, notes_db, uploaded_book
+):
+    _seed_cross_field_collision(
+        notes_db,
+        uploaded_book["id"],
+        id_target_deleted_at="2026-09-20T01:00:00+00:00",
+    )
+
+    response = client.post(
+        f"/api/books/{uploaded_book['id']}/sync",
+        json={
+            "protocol_version": 2,
+            "operations": [
+                {
+                    "op_id": "delete-cross-field-collision",
+                    "type": "highlight.delete",
+                    "entity_id": "collision-key",
+                    "payload": {},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["highlights"]] == [
+        "client-target-id"
+    ]
+    assert response.json()["highlights"][0]["deleted_at"] is None
+
+
+def test_sync_protocol_v2_delete_conflicts_for_active_exact_id_without_touching_collision(
+    client, notes_db, uploaded_book
+):
+    _seed_cross_field_collision(notes_db, uploaded_book["id"])
+
+    response = client.post(
+        f"/api/books/{uploaded_book['id']}/sync",
+        json={
+            "protocol_version": 2,
+            "operations": [
+                {
+                    "op_id": "delete-active-cross-field-collision",
+                    "type": "highlight.delete",
+                    "entity_id": "collision-key",
+                    "payload": {},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    state = client.get(f"/api/books/{uploaded_book['id']}/sync").json()
+    assert {item["id"] for item in state["highlights"]} == {
+        "collision-key",
+        "client-target-id",
+    }
+
+
 def test_legacy_sync_delete_remains_permanent(client, uploaded_book, synced_note):
     response = client.post(
         f"/api/books/{uploaded_book['id']}/sync",
