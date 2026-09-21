@@ -81,6 +81,8 @@
   let readerIframeObserver = null;
   let currentRoute = null;
   let routeTransition = Promise.resolve();
+  let pendingRoute = null;
+  let pendingRouteTransition = null;
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -501,8 +503,18 @@
 
   function applyCurrentRoute() {
     const route = getRouteFromHash();
+    if (route === pendingRoute && pendingRouteTransition) {
+      return pendingRouteTransition;
+    }
+
+    pendingRoute = route;
     const transition = routeTransition.then(() => transitionToRoute(route));
-    routeTransition = transition.catch(() => {});
+    pendingRouteTransition = transition;
+    routeTransition = transition.catch(() => {}).finally(() => {
+      if (pendingRouteTransition !== transition) return;
+      pendingRoute = null;
+      pendingRouteTransition = null;
+    });
     return transition;
   }
 

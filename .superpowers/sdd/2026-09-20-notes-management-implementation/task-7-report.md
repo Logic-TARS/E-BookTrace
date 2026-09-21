@@ -85,3 +85,18 @@
 - `npm test -- tests/import-ux.spec.js`：`3 passed`。
 - `npm test -- tests/mobile-layout.spec.js --grep "workspace|creation|exact highlight|uses a full-height reader|turns exactly one page"`：`4 passed`。
 - `node --check app.js && node --check tests/notes-management.spec.js && git diff --check`：通过。
+
+## 修复轮 3/5
+
+- `applyCurrentRoute()` 记录当前执行中或待处理的 `pendingRoute` 与对应 promise；相同目标的 `popstate`/`hashchange` 通知直接复用同一个转换，不再追加陈旧副本。
+- 转换 promise settle 后仅在仍对应当前 pending transition 时清理去重状态，因此失败恢复后的新用户导航意图仍会创建并执行新的转换。
+- 保留修复轮 1 的单次生命周期去重及修复轮 2 的失败恢复、队列不 poisoning、hash/view/currentRoute 一致性。
+
+### 修复轮 TDD 与测试
+
+- 新增 `duplicate history notifications do not replay a failed route target`：真实同步派发 `popstate` 与 `hashchange`，首次 reader lifecycle 强制失败；修复前 RED 为 reader view 丢失，证明陈旧重复目标被重放；修复后保持 `#/reader`/reader view，随后新导航成功进入 `#/creation`，`1 passed`。
+- `npm test -- tests/notes-management.spec.js --grep "one history navigation|route queue recovers|duplicate history notifications"`：`3 passed`。
+- `npm test -- tests/notes-management.spec.js --grep "creation route|history|reader hint|route queue|duplicate history"`：`7 passed`。
+- `npm test -- tests/import-ux.spec.js`：`3 passed`。
+- `npm test -- tests/mobile-layout.spec.js --grep "workspace|creation|exact highlight|uses a full-height reader|turns exactly one page"`：`4 passed`。
+- `node --check app.js && node --check tests/notes-management.spec.js && git diff --check`：通过。
