@@ -62,7 +62,7 @@ function networkFirst(request) {
   }).catch(() => caches.match(request));
 }
 
-// Fetch: cache-first for app shell/books, network-first for API data
+// Fetch: cache-first for app shell/books, network-only direct fetch/503 for API data
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 

@@ -277,6 +277,63 @@ test.describe('notes management shell', () => {
     await expect(page.locator('#notes-tag-filter option[value="在线别名验证"]')).toHaveCount(1);
   });
 
+  test('online batch trash reconciles aliases into one offline record and clears its queue', async ({ page }) => {
+    const local = makeNote({ id: 'local-trash-key', client_id: 'client-trash-key', server_id: 'remote-trash-key', deleted_at: null, synced: false });
+    const server = makeNote({ id: 'server-trash-key', client_id: 'client-trash-key', server_id: 'server-trash-key', deleted_at: null });
+    const state = { notes: [server], batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, {
+      highlights: [local],
+      operations: [{
+        id: 'highlight.upsert:book-1:local-trash-key', op_id: 'pending-trash', book_id: 'book-1',
+        type: 'highlight.upsert', entity_id: 'local-trash-key', payload: local,
+      }],
+    });
+    await page.reload();
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '移入回收站' }).click();
+    await page.getByRole('button', { name: '确认移入' }).click();
+
+    await expect.poll(async () => (await readNotesIndexedDb(page)).filter(note => (
+      ['local-trash-key', 'server-trash-key', 'client-trash-key'].includes(note.id)
+    ))).toHaveLength(1);
+    const records = await readNotesIndexedDb(page);
+    expect(records[0].id).toBe('local-trash-key');
+    expect(records[0].deleted_at).toEqual(expect.any(String));
+    expect(records[0].synced).toBe(true);
+    expect(await readSyncQueue(page)).toHaveLength(0);
+  });
+
+  test('online batch restore reconciles aliases into one offline record and clears its queue', async ({ page }) => {
+    const local = makeNote({ id: 'local-restore-key', client_id: 'client-restore-key', server_id: 'remote-restore-key', deleted_at: '2026-09-21T00:00:00Z', synced: false });
+    const server = makeNote({ id: 'server-restore-key', client_id: 'client-restore-key', server_id: 'server-restore-key', deleted_at: '2026-09-21T00:00:00Z' });
+    const state = { notes: [server], batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, {
+      highlights: [local],
+      operations: [{
+        id: 'highlight.upsert:book-1:local-restore-key', op_id: 'pending-restore', book_id: 'book-1',
+        type: 'highlight.upsert', entity_id: 'local-restore-key', payload: local,
+      }],
+    });
+    await page.reload();
+    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '恢复' }).click();
+    await page.getByRole('button', { name: '确认' }).click();
+
+    await expect.poll(async () => (await readNotesIndexedDb(page)).filter(note => (
+      ['local-restore-key', 'server-restore-key', 'client-restore-key'].includes(note.id)
+    ))).toHaveLength(1);
+    const records = await readNotesIndexedDb(page);
+    expect(records[0].id).toBe('local-restore-key');
+    expect(records[0].deleted_at).toBeNull();
+    expect(records[0].synced).toBe(true);
+    expect(await readSyncQueue(page)).toHaveLength(0);
+  });
+
   test('initial API failure falls back to IndexedDB with incomplete warning', async ({ page }) => {
     await page.goto('/#/creation');
     await seedNotesIndexedDb(page, { highlights: [makeNote({ synced: false })] });
