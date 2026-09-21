@@ -4438,19 +4438,21 @@
       if (query.noteKind === 'highlight' && note.note) return false;
       if (query.color && note.color !== query.color) return false;
       if (query.tags?.length && !query.tags.every(tag => (note.tags || []).includes(tag))) return false;
-      if (q && ![note.highlight_text, note.note, ...(note.tags || [])]
+      if (q && ![note.highlight_text, note.note, note.book_title, note.book_author, note.chapter, ...(note.tags || [])]
         .join(' ').toLowerCase().includes(q)) return false;
       return true;
     });
     const sortValue = (note) => {
       if (query.sort === 'created_desc') return String(note.created_at || '');
-      if (query.sort === 'position' || query.sort === 'book') return Number(note.progress_percent || 0);
-      return String(note.updated_at || '');
+      if (query.sort === 'position') return [Number(note.progress_percent || 0), String(note.created_at || ''), String(note.id || '')];
+      if (query.sort === 'book') return [String(note.book_title || ''), Number(note.progress_percent || 0), String(note.created_at || ''), String(note.id || '')];
+      return [String(note.updated_at || ''), String(note.id || '')];
     };
     return filtered.sort((a, b) => {
       const av = sortValue(a); const bv = sortValue(b);
-      return query.sort === 'position' || query.sort === 'book'
-        ? av - bv : String(bv).localeCompare(String(av));
+      if (query.sort === 'position') return av[0] - bv[0] || av[1].localeCompare(bv[1]) || av[2].localeCompare(bv[2]);
+      if (query.sort === 'book') return av[0].localeCompare(bv[0]) || av[1] - bv[1] || av[2].localeCompare(bv[2]) || av[3].localeCompare(bv[3]);
+      return bv[0].localeCompare(av[0]) || bv[1].localeCompare(av[1]);
     });
   }
 
@@ -4468,9 +4470,11 @@
   }
 
   async function loadOfflineNotes(query) {
-    const local = (await dbGetAllSafe('highlights')).filter(note => !note.deleted_at);
+    const local = await dbGetAllSafe('highlights');
     const matching = filterAndSortLocalNotes(local, query);
-    return { items: matching, total: matching.length, has_more: false, facets: getLocalNotesFacets(matching) };
+    const facetQuery = { ...query, bookId: '', tags: [], color: '' };
+    const facetItems = filterAndSortLocalNotes(local, facetQuery);
+    return { items: matching, total: matching.length, has_more: false, facets: getLocalNotesFacets(facetItems) };
   }
 
   async function loadPendingNotes(query = notesQuery) {
@@ -4484,7 +4488,7 @@
       || pendingKeys.has(String(note.client_id)) || pendingKeys.has(String(note.server_id)) || !note.synced), pendingQuery);
   }
 
-  function mergeServerAndLocalNotes(serverItems, localItems, queuedOperations) {
+  function mergeServerAndLocalNotes(serverItems, localItems, queuedOperations, query = notesQuery) {
     const aliases = new Map();
     const merged = new Map();
     const add = (item, allowNew) => {
@@ -4495,7 +4499,8 @@
       getNoteAliases(item).forEach(alias => aliases.set(alias, key));
     };
     serverItems.forEach(item => add(item, true));
-    localItems.filter(item => !item.synced).forEach(item => add(item, false));
+    localItems.filter(item => !item.synced && (query.view === 'trash' ? item.deleted_at : !item.deleted_at))
+      .forEach(item => add(item, false));
     queuedOperations.forEach(operation => {
       const payload = operation.payload || {};
       const operationAliases = [operation.entity_id, payload.id, payload.client_id, payload.server_id].filter(Boolean).map(String);
@@ -4542,7 +4547,7 @@
   async function loadNotesManagement({ preserveDetail = false } = {}) {
     const requestQuery = { ...notesQuery, q: String(notesQuery.q || '').trim(), tags: [...(notesQuery.tags || [])] };
     if (requestQuery.q.length === 1) {
-      notesItems = filterAndSortLocalNotes((await dbGetAllSafe('highlights')).filter(note => !note.deleted_at), requestQuery);
+      notesItems = filterAndSortLocalNotes(await dbGetAllSafe('highlights'), requestQuery);
       notesTotal = notesItems.length;
       if (dom.notesDataStatus) dom.notesDataStatus.textContent = '至少输入 2 个字符';
       notesHasMore = false;
@@ -4557,7 +4562,7 @@
       } else {
         const result = await fetchServerNotes(requestQuery);
         const [local, queued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
-            notesItems = mergeServerAndLocalNotes(result.items || [], local, queued);
+        notesItems = mergeServerAndLocalNotes(result.items || [], local, queued, requestQuery);
         notesTotal = Number(result.total || 0);
         notesHasMore = Boolean(result.has_more);
         notesFacets = result.facets || null;

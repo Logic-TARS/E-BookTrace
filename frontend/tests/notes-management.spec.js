@@ -322,7 +322,6 @@ test.describe('notes management shell', () => {
 
   test('creation route upgrades IndexedDB to v6 without deleting old stores', async ({ page }) => {
     await installNotesApiRoutes(page, { notes: [] });
-    await page.goto('/manifest.json');
     await page.evaluate(databaseName => new Promise((resolve, reject) => {
       const deleteRequest = indexedDB.deleteDatabase(databaseName);
       deleteRequest.onerror = () => reject(deleteRequest.error);
