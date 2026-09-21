@@ -64,6 +64,76 @@ def legacy_notes_db(tmp_path, monkeypatch):
     return path
 
 
+@pytest.fixture
+def notes_db(tmp_path, monkeypatch):
+    path = tmp_path / "notes.db"
+    monkeypatch.setattr(database, "DB_PATH", path)
+    run(database.init_db())
+
+    rows = [
+        (
+            "note-a-new", "book-a", "庄子", "庄周", "齐物论", "思想自由",
+            "思想需要反复体会", '["哲学", "重读"]', "yellow", 20,
+            "2026-01-03T00:00:00Z", "2026-02-03T00:00:00Z", None,
+        ),
+        (
+            "note-a-old", "book-a", "庄子", "庄周", "逍遥游", "思想之旅",
+            "旧思想仍有启发", '["哲学", "重读", "经典"]', "yellow", 10,
+            "2026-01-02T00:00:00Z", "2026-02-02T00:00:00Z", None,
+        ),
+        (
+            "note-b", "book-b", "沉思录", "马可·奥勒留", "卷一", "思想训练",
+            "日日反省", '["哲学", "重读", "斯多葛"]', "yellow", 30,
+            "2026-01-09T00:00:00Z", "2026-02-01T00:00:00Z", None,
+        ),
+        (
+            "note-blue", "book-a", "庄子", "庄周", "齐物论", "万物并作",
+            "", '["哲学"]', "blue", 40,
+            "2026-01-04T00:00:00Z", "2026-02-04T00:00:00Z", None,
+        ),
+        (
+            "note-green", "book-b", "沉思录", "马可·奥勒留", "卷一", "向内看",
+            "   ", '["修行"]', "green", 50,
+            "2026-01-05T00:00:00Z", "2026-02-05T00:00:00Z", None,
+        ),
+        (
+            "note-pink", "book-b", "沉思录", "马可·奥勒留", "卷二", "活在当下",
+            "记住此刻", '["修行", "重读"]', "pink", 60,
+            "2026-01-06T00:00:00Z", "2026-02-06T00:00:00Z", None,
+        ),
+        (
+            "note-tie-b", "book-b", "沉思录", "马可·奥勒留", "卷二", "排序乙",
+            "", '[]', "blue", 70,
+            "2026-01-07T00:00:00Z", "2026-02-07T00:00:00Z", None,
+        ),
+        (
+            "note-tie-a", "book-b", "沉思录", "马可·奥勒留", "卷二", "排序甲",
+            "", '[]', "blue", 70,
+            "2026-01-07T00:00:00Z", "2026-02-07T00:00:00Z", None,
+        ),
+        (
+            "note-trash", "book-a", "庄子", "庄周", "逍遥游", "思想旧稿",
+            "待清理", '["哲学"]', "yellow", 80,
+            "2026-01-08T00:00:00Z", "2026-02-08T00:00:00Z",
+            "2026-03-01T00:00:00Z",
+        ),
+    ]
+    connection = sqlite3.connect(path)
+    connection.executemany(
+        """
+        INSERT INTO highlights (
+            id, book_id, book_title, book_author, chapter, highlight_text,
+            note, tags, color, progress_percent, created_at, updated_at,
+            received_at, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [row[:12] + (row[11], row[12]) for row in rows],
+    )
+    connection.commit()
+    connection.close()
+    return path
+
+
 def test_init_db_migration_upgrades_legacy_notes_without_data_loss(legacy_notes_db):
     run(database.init_db())
     run(database.init_db())
@@ -95,3 +165,183 @@ def test_init_db_migration_upgrades_legacy_notes_without_data_loss(legacy_notes_
     assert note == ("旧书", "旧划线", None)
     assert draft == ("历史稿件", "必须保留")
     assert operations_table == ("note_batch_operations",)
+
+
+def test_list_notes_combines_filters_and_returns_self_excluding_facets(notes_db):
+    result = run(
+        database.list_notes(
+            q="思想",
+            book_id="book-a",
+            tags=["哲学", "重读"],
+            note_kind="reflected",
+            color="yellow",
+            view="active",
+            sort="updated_desc",
+            limit=1,
+            offset=0,
+        )
+    )
+
+    assert [item["id"] for item in result["items"]] == ["note-a-new"]
+    assert result["total"] == 2
+    assert result["limit"] == 1
+    assert result["offset"] == 0
+    assert result["has_more"] is True
+    assert {book["id"] for book in result["facets"]["books"]} == {
+        "book-a",
+        "book-b",
+    }
+    assert {tag["name"] for tag in result["facets"]["tags"]} >= {
+        "哲学",
+        "重读",
+        "经典",
+    }
+
+
+def test_list_notes_facets_use_full_matching_set_not_pagination_page(notes_db):
+    result = run(database.list_notes(q="思想", limit=1))
+
+    assert result["total"] == 3
+    assert {book["id"] for book in result["facets"]["books"]} == {
+        "book-a",
+        "book-b",
+    }
+    assert {tag["name"] for tag in result["facets"]["tags"]} >= {
+        "哲学",
+        "重读",
+        "经典",
+        "斯多葛",
+    }
+
+
+def test_list_notes_separates_active_and_trash_views(notes_db):
+    active = run(database.list_notes(view="active"))
+    trash = run(database.list_notes(view="trash"))
+
+    assert all(item["deleted_at"] is None for item in active["items"])
+    assert [item["id"] for item in trash["items"]] == ["note-trash"]
+
+
+def test_list_notes_search_uses_like_for_two_character_chinese_query(notes_db):
+    result = run(database.list_notes(q="思想"))
+
+    assert {item["id"] for item in result["items"]} == {
+        "note-a-new",
+        "note-a-old",
+        "note-b",
+    }
+
+
+def test_list_notes_search_falls_back_when_fts_is_unavailable(notes_db, monkeypatch):
+    async def unavailable(_db, *, rebuild=False):
+        raise sqlite3.OperationalError("no such tokenizer: trigram")
+
+    monkeypatch.setattr(database, "_ensure_notes_fts", unavailable)
+
+    result = run(database.list_notes(q="思想训练"))
+
+    assert [item["id"] for item in result["items"]] == ["note-b"]
+
+
+def test_list_notes_search_uses_fts_when_available(notes_db, monkeypatch):
+    used_fts = False
+    original = database._build_notes_where
+
+    def track_fts(**kwargs):
+        nonlocal used_fts
+        used_fts = used_fts or kwargs["use_fts"]
+        return original(**kwargs)
+
+    monkeypatch.setattr(database, "_build_notes_where", track_fts)
+
+    result = run(database.list_notes(q="思想训练"))
+
+    assert [item["id"] for item in result["items"]] == ["note-b"]
+    assert used_fts is True
+
+
+def test_list_notes_filter_multi_tag_uses_and_semantics(notes_db):
+    result = run(database.list_notes(tags=["哲学", "重读"]))
+
+    assert {item["id"] for item in result["items"]} == {
+        "note-a-new",
+        "note-a-old",
+        "note-b",
+    }
+
+
+@pytest.mark.parametrize(
+    ("note_kind", "expected_ids"),
+    [
+        ("reflected", {"note-a-new", "note-a-old", "note-b", "note-pink"}),
+        (
+            "highlight_only",
+            {"note-blue", "note-green", "note-tie-a", "note-tie-b"},
+        ),
+    ],
+)
+def test_list_notes_filter_note_kind(notes_db, note_kind, expected_ids):
+    result = run(database.list_notes(note_kind=note_kind))
+
+    assert {item["id"] for item in result["items"]} == expected_ids
+
+
+@pytest.mark.parametrize(
+    ("sort", "expected_ids"),
+    [
+        ("updated_desc", ["note-tie-a", "note-tie-b"]),
+        ("created_desc", ["note-tie-a", "note-tie-b"]),
+        ("position", ["note-tie-a", "note-tie-b"]),
+        ("book", ["note-tie-a", "note-tie-b"]),
+    ],
+)
+def test_list_notes_sort_has_stable_id_secondary_key(notes_db, sort, expected_ids):
+    result = run(database.list_notes(q="排序", sort=sort))
+
+    assert [item["id"] for item in result["items"]] == expected_ids
+
+
+@pytest.mark.parametrize(
+    ("sort", "expected_ids"),
+    [
+        ("updated_desc", ["note-blue", "note-a-new", "note-a-old", "note-b"]),
+        ("created_desc", ["note-b", "note-blue", "note-a-new", "note-a-old"]),
+        ("position", ["note-a-old", "note-a-new", "note-b", "note-blue"]),
+        ("book", ["note-a-new", "note-a-old", "note-blue", "note-b"]),
+    ],
+)
+def test_list_notes_sort_orders_distinct_values(notes_db, sort, expected_ids):
+    result = run(database.list_notes(tags=["哲学"], sort=sort))
+
+    assert [item["id"] for item in result["items"]] == expected_ids
+
+
+def test_list_notes_sort_uses_whitelist_for_unknown_value(notes_db):
+    result = run(database.list_notes(q="排序", sort="updated_at; DROP TABLE highlights"))
+
+    assert [item["id"] for item in result["items"]] == ["note-tie-a", "note-tie-b"]
+    assert run(database.list_notes())["total"] == 8
+
+
+def test_list_notes_pagination_reports_matching_total(notes_db):
+    first = run(database.list_notes(limit=3, offset=0))
+    last = run(database.list_notes(limit=3, offset=6))
+
+    assert len(first["items"]) == 3
+    assert first["total"] == 8
+    assert first["has_more"] is True
+    assert len(last["items"]) == 2
+    assert last["total"] == 8
+    assert last["has_more"] is False
+
+
+def test_list_notes_for_export_filters_and_sorts_all_active_matches(notes_db):
+    result = run(database.list_notes_for_export(tags=["哲学"]))
+
+    assert [item["id"] for item in result] == [
+        "note-a-old",
+        "note-a-new",
+        "note-blue",
+        "note-b",
+    ]
+    assert all(item["deleted_at"] is None for item in result)

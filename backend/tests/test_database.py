@@ -14,7 +14,7 @@ import database
 
 # Helper: run coroutines synchronously (no pytest-asyncio needed)
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +84,25 @@ class TestDatabase:
         run(database.save_highlights(sample_highlights))
         result = run(database.get_highlights_by_ids(["nonexistent"]))
         assert result == []
+
+    def test_legacy_read_interfaces_exclude_deleted_highlights(self, temp_db, sample_highlights):
+        ids = run(database.save_highlights(sample_highlights[:2]))
+
+        async def move_to_trash():
+            import aiosqlite
+
+            async with aiosqlite.connect(temp_db) as db:
+                await db.execute(
+                    "UPDATE highlights SET deleted_at = ? WHERE id = ?",
+                    ("2026-03-01T00:00:00Z", ids[1]),
+                )
+                await db.commit()
+
+        run(move_to_trash())
+
+        assert [item["id"] for item in run(database.get_all_highlights())] == [ids[0]]
+        assert [item["id"] for item in run(database.get_materials())] == [ids[0]]
+        assert [item["id"] for item in run(database.get_highlights_by_ids(ids))] == [ids[0]]
 
     def test_filter_by_book_title(self, temp_db, sample_highlights):
         run(database.save_highlights(sample_highlights))
