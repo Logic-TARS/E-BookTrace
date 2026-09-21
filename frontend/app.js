@@ -4468,7 +4468,7 @@
   }
 
   async function loadOfflineNotes(query) {
-    const local = await dbGetAllSafe('highlights');
+    const local = (await dbGetAllSafe('highlights')).filter(note => !note.deleted_at);
     const matching = filterAndSortLocalNotes(local, query);
     return { items: matching, total: matching.length, has_more: false, facets: getLocalNotesFacets(matching) };
   }
@@ -4542,7 +4542,7 @@
   async function loadNotesManagement({ preserveDetail = false } = {}) {
     const requestQuery = { ...notesQuery, q: String(notesQuery.q || '').trim(), tags: [...(notesQuery.tags || [])] };
     if (requestQuery.q.length === 1) {
-      notesItems = filterAndSortLocalNotes(await dbGetAllSafe('highlights'), requestQuery);
+      notesItems = filterAndSortLocalNotes((await dbGetAllSafe('highlights')).filter(note => !note.deleted_at), requestQuery);
       notesTotal = notesItems.length;
       if (dom.notesDataStatus) dom.notesDataStatus.textContent = '至少输入 2 个字符';
       notesHasMore = false;
@@ -4582,6 +4582,8 @@
     renderNotesManagement(notesItems);
     if (preserveDetail && dom.notesLiveStatus) {
       dom.notesLiveStatus.dataset.preserveDetail = 'true';
+      dom.notesLiveStatus.dataset.managedNoteKey = dom.notesLiveStatus.dataset.managedNoteKey || '';
+      dom.notesLiveStatus.dataset.draftState = dom.notesLiveStatus.dataset.draftState || 'clean';
     }
   }
 
@@ -4648,34 +4650,44 @@
     book.state_revision = state.revision || 0;
     await dbPut('books', book);
 
-    const localHighlights = (await dbGetByIndex('highlights', 'by_book', bookId))
-      .filter(highlight => !highlight.deleted_at);
+    const localHighlights = await dbGetByIndex('highlights', 'by_book', bookId);
     const queuedOperations = dbHasStore('sync_queue')
       ? await dbGetByIndex('sync_queue', 'by_book', bookId)
       : [];
-    const queuedIds = new Set(queuedOperations.map(operation => String(operation.entity_id || '')));
+    const aliasMap = new Map();
+    localHighlights.forEach(highlight => getNoteAliases(highlight).forEach(alias => aliasMap.set(alias, highlight.id)));
+    const queuedAliases = new Set(queuedOperations.flatMap(operation => {
+      const payload = operation.payload || {};
+      return [operation.entity_id, payload.id, payload.client_id, payload.server_id]
+        .filter(Boolean).map(String);
+    }));
+    const serverAliases = new Set((state.highlights || []).flatMap(highlight => [highlight.id, highlight.client_id]
+      .filter(Boolean).map(String)));
     for (const highlight of localHighlights) {
-      if (!queuedIds.has(String(highlight.id)) && !queuedIds.has(String(highlight.server_id))) {
+      const aliases = getNoteAliases(highlight);
+      if (!aliases.some(alias => queuedAliases.has(alias)) && !aliases.some(alias => serverAliases.has(alias))) {
         await dbDelete('highlights', highlight.id);
       }
     }
     for (const highlight of state.highlights || []) {
+      const aliases = [highlight.id, highlight.client_id].filter(Boolean).map(String);
+      const localId = aliases.map(alias => aliasMap.get(alias)).find(Boolean);
+      const existing = localId ? await dbGet('highlights', localId) : null;
+      if (existing && getNoteAliases(existing).some(alias => queuedAliases.has(alias))) continue;
       await dbPut('highlights', {
         ...highlight,
-        id: highlight.client_id || highlight.id,
+        id: existing?.id || highlight.client_id || highlight.id,
         server_id: highlight.id,
         book_id: bookId,
         synced: true,
         synced_at: highlight.updated_at || new Date().toISOString(),
       });
     }
-    const aliasMap = new Map();
-    localHighlights.forEach(highlight => getNoteAliases(highlight).forEach(alias => aliasMap.set(alias, highlight.id)));
     for (const operation of queuedOperations) {
       const payload = operation.payload || {};
       const aliases = [operation.entity_id, payload.id, payload.client_id, payload.server_id]
         .filter(Boolean).map(String);
-      const localId = aliases.map(alias => aliasMap.get(alias) || alias).find(alias => aliasMap.has(alias));
+      const localId = aliases.map(alias => aliasMap.get(alias)).find(Boolean);
       const current = localId ? await dbGet('highlights', localId) : null;
       if (!current) continue;
       aliases.forEach(alias => aliasMap.set(alias, current.id));

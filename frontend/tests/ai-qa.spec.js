@@ -324,7 +324,7 @@ test.describe('AI book Q&A', () => {
     });
 
     const restored = await page.evaluate(() => new Promise((resolve, reject) => {
-      const request = indexedDB.open('marginalia', 5);
+      const request = indexedDB.open('marginalia', 6);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const db = request.result;

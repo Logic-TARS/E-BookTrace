@@ -327,7 +327,7 @@ test.describe('notes management shell', () => {
       const deleteRequest = indexedDB.deleteDatabase(databaseName);
       deleteRequest.onerror = () => reject(deleteRequest.error);
       deleteRequest.onsuccess = () => {
-        const openRequest = indexedDB.open(databaseName, 5);
+        const openRequest = indexedDB.open(databaseName, INDEXED_DB_VERSION);
         openRequest.onupgradeneeded = () => {
           const database = openRequest.result;
           database.createObjectStore('legacy_notes', { keyPath: 'id' }).put({ id: 'legacy-1' });
