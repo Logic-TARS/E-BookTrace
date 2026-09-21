@@ -39,3 +39,4 @@ test-results/
 
 # Misc
 .omo/
+.worktrees/
