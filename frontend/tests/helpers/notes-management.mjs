@@ -206,7 +206,7 @@ export async function installNotesApiRoutes(page, state = {}) {
       const ids = new Set(body.ids || []);
       const matches = note => ids.has(note.id) || ids.has(note.server_id) || ids.has(note.client_id);
       if (type === 'trash') state.notes.forEach(note => { if (matches(note)) note.deleted_at = new Date().toISOString(); });
-      if (type === 'restore') state.notes.forEach(note => { if (matches(note)) note.deleted_at = note.deleted_at || new Date().toISOString(); });
+      if (type === 'restore') state.notes.forEach(note => { if (matches(note)) note.deleted_at = null; });
       if (type === 'delete') state.notes = state.notes.filter(note => !matches(note));
       await route.fulfill({ json: {
         operation_id: body.operation_id,

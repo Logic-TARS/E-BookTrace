@@ -553,11 +553,36 @@ test.describe('notes management shell', () => {
     await page.getByRole('button', { name: '撤销' }).click();
     expect(state.batchRequests.at(-1).type).toBe('restore');
 
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '移入回收站' }).click();
+    await page.getByRole('button', { name: '确认移入' }).click();
     await page.getByRole('button', { name: '回收站', exact: true }).click();
     await page.getByLabel('选择 测试划线').check();
     await page.getByRole('button', { name: '永久删除' }).click();
     await expect(page.getByText('永久删除 1 条笔记')).toBeVisible();
     await page.getByRole('button', { name: '确认永久删除' }).click();
     expect(state.batchRequests.at(-1).type).toBe('delete');
+  });
+
+  test('offline trash queues protocol v2 operations by book and undo updates local state', async ({ page }) => {
+    const note = makeNote({ server_id: 'server-note-1' });
+    await installNotesApiRoutes(page, { notes: [note] });
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [note] });
+    await page.reload();
+    await page.context().setOffline(true);
+    await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: false }));
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '移入回收站' }).click();
+    await page.getByRole('button', { name: '确认移入' }).click();
+    await expect.poll(async () => (await readSyncQueue(page)).length).toBeGreaterThan(0);
+    const queuedAfterTrash = await readSyncQueue(page);
+    expect(queuedAfterTrash[0]).toMatchObject({ book_id: 'book-1', type: 'highlight.trash' });
+    expect(queuedAfterTrash[0].payload.deleted_at).toEqual(expect.any(String));
+    await page.getByRole('button', { name: '撤销' }).click();
+    await expect.poll(async () => (await readSyncQueue(page)).some(item => item.type === 'highlight.restore')).toBe(true);
+    const queuedAfterUndo = await readSyncQueue(page);
+    expect(queuedAfterUndo.find(item => item.type === 'highlight.restore')).toMatchObject({ book_id: 'book-1', type: 'highlight.restore', payload: {} });
+    expect((await readNotesIndexedDb(page))[0].deleted_at).toBeNull();
   });
 });

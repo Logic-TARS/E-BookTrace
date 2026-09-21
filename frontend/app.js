@@ -4735,7 +4735,7 @@
 
   async function applyLocalNoteOperation(note, type, payload = {}) {
     const updated = { ...note };
-    if (type === 'highlight.trash') updated.deleted_at = payload.deletedAt;
+    if (type === 'highlight.trash') updated.deleted_at = payload.deleted_at || new Date().toISOString();
     if (type === 'highlight.restore') updated.deleted_at = null;
     if (type === 'highlight.delete') {
       await dbDelete('highlights', note.id);
@@ -4744,7 +4744,12 @@
       await dbPut('highlights', updated);
     }
     if (!note.book_id) throw new Error('该历史记录需联网后操作');
-    await queueReaderSync(note.book_id, type, note.client_id || note.id, payload);
+    await dbPut('sync_queue', {
+      id: `${type}:${note.book_id}:${note.client_id || note.id}`,
+      op_id: uuid(), book_id: note.book_id, type,
+      entity_id: note.client_id || note.id, payload, queued_at: Date.now(),
+    });
+    updateSyncBadge();
   }
 
   async function applyNotesBatch(type, payload = {}) {
@@ -4754,23 +4759,31 @@
       const ids = notes.map(note => note.server_id || note.id);
       const endpoint = type === 'tags' ? 'tags' : type;
       const operationId = uuid();
-      const response = await fetchWithTimeout(`${API_BASE}/api/notes/batch/${endpoint}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operation_id: operationId, ids, ...payload }),
-      });
-      if (!response.ok) throw new Error(`Server responded with ${response.status}`);
-      const result = await response.json();
-      notes.forEach(note => {
+      try {
+        const response = await fetchWithTimeout(`${API_BASE}/api/notes/batch/${endpoint}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operation_id: operationId, ids, ...payload }),
+        });
+        if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+        const result = await response.json();
+        if (Number(result.affected || 0) < 0) throw new Error('Invalid batch result');
+        notes.forEach(note => {
         if (type === 'trash') note.deleted_at = result.deleted_at || new Date().toISOString();
         if (type === 'restore') note.deleted_at = null;
         if (type === 'tags') note.tags = payload.action === 'add'
           ? [...new Set([...(note.tags || []), ...payload.tags])]
           : (note.tags || []).filter(tag => !payload.tags.includes(tag));
-        note.synced = true;
-      });
+          note.synced = true;
+        });
+      } catch (error) {
+        if (navigator.onLine && error?.name !== 'TypeError' && error?.message !== 'Failed to fetch') throw error;
+        for (const note of notes) {
+          await applyLocalNoteOperation(note, `highlight.${type === 'delete' ? 'delete' : type}`, type === 'trash' ? { deleted_at: new Date().toISOString() } : payload);
+        }
+      }
     } else {
       for (const note of notes) {
-        await applyLocalNoteOperation(note, `highlight.${type === 'delete' ? 'delete' : type}`, type === 'trash' ? { deletedAt: new Date().toISOString() } : payload);
+        await applyLocalNoteOperation(note, `highlight.${type === 'delete' ? 'delete' : type}`, type === 'trash' ? { deleted_at: new Date().toISOString() } : payload);
       }
     }
     notesSelection.clear();
@@ -4794,15 +4807,28 @@
       if (type === 'trash') {
         const undo = document.createElement('button'); undo.type = 'button'; undo.textContent = '撤销'; undo.className = 'btn btn-ghost btn-sm';
         undo.onclick = async () => {
-          const ids = lastTrashedNotes.map(note => note.server_id || note.id);
+          const notes = lastTrashedNotes;
+          notesSelection.clear();
+          notes.forEach(note => notesSelection.add(getStableNoteKey(note)));
           try {
-            const response = await fetchWithTimeout(`${API_BASE}/api/notes/batch/restore`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ operation_id: uuid(), ids }),
-            });
-            if (!response.ok) throw new Error('restore failed');
+            if (navigator.onLine) {
+              const response = await fetchWithTimeout(`${API_BASE}/api/notes/batch/restore`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ operation_id: uuid(), ids: notes.map(note => note.server_id || note.id) }),
+              });
+              if (!response.ok) throw new Error('restore failed');
+              const result = await response.json();
+              if (Number(result.affected || 0) < 1) throw new Error('restore affected no notes');
+            } else {
+              for (const note of notes) await applyLocalNoteOperation(note, 'highlight.restore', {});
+            }
+            notesSelection.clear();
             await loadNotesManagement();
-          } catch (_error) { showToast('撤销失败，请重试', 'error'); }
+            dom.toast.hidden = true;
+          } catch (_error) {
+            await loadNotesManagement();
+            showToast('撤销失败，请重试', 'error');
+          }
         };
         dom.toast.appendChild(undo); dom.toast.hidden = false;
       }
@@ -5156,10 +5182,22 @@
     dom.btnBatchRestore?.addEventListener('click', () => runSelectedNotesAction('restore'));
     dom.btnBatchDelete?.addEventListener('click', () => runSelectedNotesAction('delete'));
     dom.btnEmptyTrash?.addEventListener('click', async () => {
-      const trash = (await loadOfflineNotes({ ...notesQuery, view: 'trash' })).items;
+      const trash = [];
+      if (navigator.onLine) {
+        let offset = 0;
+        while (true) {
+          const result = await fetchServerNotes({ ...notesQuery, view: 'trash', offset, limit: 100 });
+          trash.push(...(result.items || []));
+          if (!result.has_more) break;
+          offset += 100;
+        }
+      } else {
+        trash.push(...(await loadOfflineNotes({ ...notesQuery, view: 'trash' })).items);
+      }
       if (!trash.length) return;
       const confirmed = await showNotesConfirm(`永久删除回收站中的 ${trash.length} 条笔记`, { danger: true, confirmLabel: '确认清空' });
       if (confirmed !== null) {
+        notesItems = trash;
         for (let index = 0; index < trash.length; index += 100) {
           notesSelection.clear(); trash.slice(index, index + 100).forEach(note => notesSelection.add(getStableNoteKey(note)));
           try { await applyNotesBatch('delete'); } catch (_error) { showToast('清空回收站失败，已保留已完成批次', 'error'); break; }
