@@ -520,4 +520,44 @@ test.describe('notes management shell', () => {
     await page.getByRole('button', { name: '撤销' }).click();
     await expect(page.getByRole('textbox', { name: '感悟' })).toHaveValue('原感悟');
   });
+
+  test('select all affects only the current page and batch adds tags', async ({ page }) => {
+    const notes = Array.from({ length: 55 }, (_, index) => makeNote({
+      id: `note-${index}`,
+      client_id: `client-${index}`,
+      server_id: `server-${index}`,
+      highlight_text: `划线 ${index}`,
+    }));
+    const state = { notes, batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await page.getByLabel('全选当前页').check();
+    await expect(page.getByText('已选择 50 条')).toBeVisible();
+    await page.getByRole('button', { name: '添加标签' }).click();
+    await page.getByLabel('批量标签').fill('整理，重读');
+    await page.getByRole('button', { name: '确认添加' }).click();
+
+    expect(state.batchRequests[0].ids).toHaveLength(50);
+    expect(state.batchRequests[0].tags).toEqual(['整理', '重读']);
+  });
+
+  test('trash undo restore and permanent delete stay distinct', async ({ page }) => {
+    const note = makeNote();
+    const state = { notes: [note], batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '移入回收站' }).click();
+    await expect(page.getByText('将 1 条笔记移入回收站')).toBeVisible();
+    await page.getByRole('button', { name: '确认移入' }).click();
+    await page.getByRole('button', { name: '撤销' }).click();
+    expect(state.batchRequests.at(-1).type).toBe('restore');
+
+    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '永久删除' }).click();
+    await expect(page.getByText('永久删除 1 条笔记')).toBeVisible();
+    await page.getByRole('button', { name: '确认永久删除' }).click();
+    expect(state.batchRequests.at(-1).type).toBe('delete');
+  });
 });

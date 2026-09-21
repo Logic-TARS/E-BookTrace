@@ -240,7 +240,7 @@
           <select id="notes-tag-filter"><option value="">全部标签</option></select>
         </label>
         <label>
-          <span>类型筛选</span>
+          <span>内容类型</span>
           <select id="notes-kind-filter">
             <option value="">全部类型</option>
             <option value="highlight">仅划线</option>
@@ -271,7 +271,7 @@
       </section>
 
       <section class="notes-batch-bar notes-shell-section" aria-label="批量操作">
-        <label><input id="notes-select-page" type="checkbox"> 当前页全选</label>
+        <label><input id="notes-select-page" type="checkbox" aria-label="全选当前页"> 全选当前页</label>
         <strong id="notes-selection-count">已选择 0 条</strong>
         <button class="btn btn-secondary btn-sm" id="btn-batch-add-tag" type="button" disabled>添加标签</button>
         <button class="btn btn-secondary btn-sm" id="btn-batch-remove-tag" type="button" disabled>移除标签</button>
@@ -321,7 +321,7 @@
       <div id="notes-count-confirm-dialog" class="modal-overlay" hidden>
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="notes-count-confirm-title">
           <div class="modal-header"><h3 id="notes-count-confirm-title">确认批量操作</h3></div>
-          <div class="modal-body"><p id="notes-count-confirm-message">将处理 0 条笔记。</p></div>
+          <div class="modal-body"><p id="notes-count-confirm-message">将处理 0 条笔记。</p><label id="notes-batch-tag-field" hidden>批量标签<input id="notes-batch-tags" aria-label="批量标签" placeholder="标签，用逗号分隔"></label></div>
           <div class="modal-footer">
             <button class="btn btn-ghost" type="button">取消</button>
             <button class="btn btn-danger" type="button">确认</button>

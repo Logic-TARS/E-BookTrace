@@ -137,6 +137,7 @@ export async function installNotesApiRoutes(page, state = {}) {
   state.books ??= [];
   state.notes ??= [];
   state.requests ??= [];
+  state.batchRequests ??= [];
   await page.route('**/api/**', async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -194,6 +195,25 @@ export async function installNotesApiRoutes(page, state = {}) {
           },
         },
       });
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/notes/batch/') && method === 'POST') {
+      body ||= {};
+      const type = url.pathname.split('/').at(-1);
+      const request = { type, ...body };
+      state.batchRequests.push(request);
+      const ids = new Set(body.ids || []);
+      const matches = note => ids.has(note.id) || ids.has(note.server_id) || ids.has(note.client_id);
+      if (type === 'trash') state.notes.forEach(note => { if (matches(note)) note.deleted_at = new Date().toISOString(); });
+      if (type === 'restore') state.notes.forEach(note => { if (matches(note)) note.deleted_at = note.deleted_at || new Date().toISOString(); });
+      if (type === 'delete') state.notes = state.notes.filter(note => !matches(note));
+      await route.fulfill({ json: {
+        operation_id: body.operation_id,
+        affected: ids.size,
+        unchanged: 0,
+        items: state.notes.filter(note => ids.has(note.id)).map(note => ({ id: note.id, client_id: note.client_id })),
+      } });
       return;
     }
 

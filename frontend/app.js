@@ -96,6 +96,7 @@
   let managedNoteOriginal = null;
   let managedNoteUndo = null;
   let managedNoteUndoTimer = null;
+  let lastTrashedNotes = [];
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -200,7 +201,19 @@
     notesLiveStatus: $('#notes-live-status'),
     notesDetailPane: $('#notes-detail-pane'),
     notesUnsavedDialog: $('#notes-unsaved-dialog'),
+    notesCountConfirmDialog: $('#notes-count-confirm-dialog'),
+    notesCountConfirmMessage: $('#notes-count-confirm-message'),
+    notesBatchTagField: $('#notes-batch-tag-field'),
+    notesBatchTags: $('#notes-batch-tags'),
     notesSelectPage: $('#notes-select-page'),
+    notesSelectionCount: $('#notes-selection-count'),
+    btnBatchAddTag: $('#btn-batch-add-tag'),
+    btnBatchRemoveTag: $('#btn-batch-remove-tag'),
+    btnBatchTrash: $('#btn-batch-trash'),
+    notesTrashActions: $('#notes-trash-actions'),
+    btnBatchRestore: $('#btn-batch-restore'),
+    btnBatchDelete: $('#btn-batch-delete'),
+    btnEmptyTrash: $('#btn-empty-trash'),
     btnNotesTrash: $('#btn-toggle-notes-trash'),
     btnClearNoteFilters: $('#btn-clear-note-filters'),
     bookDeleteModal: $('#book-delete-modal'),
@@ -4663,20 +4676,137 @@
     managedNoteUndoTimer = setTimeout(() => { managedNoteUndo = null; }, 5000);
   }
 
+  function selectedNotes() {
+    return notesItems.filter(note => notesSelection.has(getStableNoteKey(note)));
+  }
+
+  function updateNotesSelectionUi() {
+    const count = notesSelection.size;
+    if (dom.notesSelectionCount) dom.notesSelectionCount.textContent = `已选择 ${count} 条`;
+    [dom.btnBatchAddTag, dom.btnBatchRemoveTag, dom.btnBatchTrash, dom.btnBatchRestore, dom.btnBatchDelete]
+      .filter(Boolean).forEach(button => { button.disabled = count === 0; });
+    if (dom.notesSelectPage) {
+      const pageKeys = notesItems.map(getStableNoteKey).filter(Boolean);
+      dom.notesSelectPage.checked = pageKeys.length > 0 && pageKeys.every(key => notesSelection.has(key));
+      dom.notesSelectPage.indeterminate = pageKeys.some(key => notesSelection.has(key)) && !dom.notesSelectPage.checked;
+    }
+  }
+
   function renderNotesManagement(items) {
     if (!dom.notesList) return;
-    if (dom.notesSelectPage) dom.notesSelectPage.checked = false;
-    dom.notesList.innerHTML = items.length ? items.map(note => `
-      <article class="note-management-card" data-note-id="${escapeHTML(note.id)}">
-        <button class="note-management-card-button" type="button"><strong>${escapeHTML(note.highlight_text || '')}</strong><p>${escapeHTML(note.note || '未写感悟')}</p>${note.synced === false ? '<span>待同步</span>' : ''}</button>
-      </article>`).join('') : '<div class="empty-state notes-empty-state"><p>还没有可显示的笔记</p></div>';
+    dom.notesList.innerHTML = items.length ? items.map(note => {
+      const key = getStableNoteKey(note);
+      const trash = notesQuery.view === 'trash';
+      return `<article class="note-management-card" data-note-id="${escapeHTML(note.id)}">
+        <label class="note-management-select"><input type="checkbox" aria-label="选择 ${escapeHTML(note.highlight_text || '')}" data-note-select="${escapeHTML(key)}" ${notesSelection.has(key) ? 'checked' : ''}></label>
+        <button class="note-management-card-button" type="button" ${trash ? 'aria-disabled="true"' : ''}><strong>${escapeHTML(note.highlight_text || '')}</strong><p>${escapeHTML(note.note || '未写感悟')}</p>${note.synced === false ? '<span>待同步</span>' : ''}</button>
+      </article>`;
+    }).join('') : '<div class="empty-state notes-empty-state"><p>还没有可显示的笔记</p></div>';
+    dom.notesList.querySelectorAll('[data-note-select]').forEach(input => input.addEventListener('change', () => {
+      if (input.checked) notesSelection.add(input.dataset.noteSelect); else notesSelection.delete(input.dataset.noteSelect);
+      updateNotesSelectionUi();
+    }));
     dom.notesList.querySelectorAll('.note-management-card-button').forEach(button => button.addEventListener('click', () => {
+      if (notesQuery.view === 'trash') return;
       const note = notesItems.find(item => item.id === button.closest('[data-note-id]').dataset.noteId);
       requestNotesNavigation(() => openManagedNote(note));
     }));
     if (dom.notesPageStatus) dom.notesPageStatus.textContent = `第 ${Math.floor(notesQuery.offset / notesQuery.limit) + 1} 页`;
     if (dom.notesPrevious) dom.notesPrevious.disabled = notesQuery.offset === 0;
     if (dom.notesNext) dom.notesNext.disabled = !notesHasMore;
+    if (dom.notesTrashActions) dom.notesTrashActions.hidden = notesQuery.view !== 'trash';
+    updateNotesSelectionUi();
+  }
+
+  function showNotesConfirm(message, { tags = false, danger = false, confirmLabel = '确认' } = {}) {
+    dom.notesCountConfirmMessage.textContent = message;
+    dom.notesBatchTagField.hidden = !tags;
+    const confirmButton = dom.notesCountConfirmDialog.querySelector('.modal-footer button:last-child');
+    confirmButton.textContent = confirmLabel;
+    confirmButton.className = `btn ${danger ? 'btn-danger' : 'btn-primary'}`;
+    dom.notesCountConfirmDialog.hidden = false;
+    if (tags) dom.notesBatchTags.value = '';
+    return new Promise(resolve => {
+      const buttons = dom.notesCountConfirmDialog.querySelectorAll('.modal-footer button');
+      buttons[0].onclick = () => { dom.notesCountConfirmDialog.hidden = true; resolve(null); };
+      buttons[1].onclick = () => { dom.notesCountConfirmDialog.hidden = true; resolve(tags ? normalizeTagsInput(dom.notesBatchTags.value) : true); };
+    });
+  }
+
+  async function applyLocalNoteOperation(note, type, payload = {}) {
+    const updated = { ...note };
+    if (type === 'highlight.trash') updated.deleted_at = payload.deletedAt;
+    if (type === 'highlight.restore') updated.deleted_at = null;
+    if (type === 'highlight.delete') {
+      await dbDelete('highlights', note.id);
+    } else {
+      updated.synced = false;
+      await dbPut('highlights', updated);
+    }
+    if (!note.book_id) throw new Error('该历史记录需联网后操作');
+    await queueReaderSync(note.book_id, type, note.client_id || note.id, payload);
+  }
+
+  async function applyNotesBatch(type, payload = {}) {
+    const notes = selectedNotes();
+    if (!notes.length) return false;
+    if (navigator.onLine) {
+      const ids = notes.map(note => note.server_id || note.id);
+      const endpoint = type === 'tags' ? 'tags' : type;
+      const operationId = uuid();
+      const response = await fetchWithTimeout(`${API_BASE}/api/notes/batch/${endpoint}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation_id: operationId, ids, ...payload }),
+      });
+      if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+      const result = await response.json();
+      notes.forEach(note => {
+        if (type === 'trash') note.deleted_at = result.deleted_at || new Date().toISOString();
+        if (type === 'restore') note.deleted_at = null;
+        if (type === 'tags') note.tags = payload.action === 'add'
+          ? [...new Set([...(note.tags || []), ...payload.tags])]
+          : (note.tags || []).filter(tag => !payload.tags.includes(tag));
+        note.synced = true;
+      });
+    } else {
+      for (const note of notes) {
+        await applyLocalNoteOperation(note, `highlight.${type === 'delete' ? 'delete' : type}`, type === 'trash' ? { deletedAt: new Date().toISOString() } : payload);
+      }
+    }
+    notesSelection.clear();
+    await loadNotesManagement();
+    updateSyncBadge();
+    return true;
+  }
+
+  async function runSelectedNotesAction(type) {
+    const chosenNotes = selectedNotes();
+    const count = chosenNotes.length;
+    if (!count) return;
+    const isTag = type === 'tags';
+    const danger = type === 'trash' || type === 'delete';
+    const labels = { trash: `将 ${count} 条笔记移入回收站`, delete: `永久删除 ${count} 条笔记`, restore: `恢复 ${count} 条笔记`, tags: '为选中笔记添加标签' };
+    const value = await showNotesConfirm(labels[type], { tags: isTag, danger, confirmLabel: isTag ? '确认添加' : (type === 'trash' ? '确认移入' : (type === 'delete' ? '确认永久删除' : '确认')) });
+    if (value === null || (isTag && value.length === 0)) return;
+    try {
+      if (type === 'trash') lastTrashedNotes = chosenNotes;
+      await applyNotesBatch(type, isTag ? { action: 'add', tags: value } : {});
+      if (type === 'trash') {
+        const undo = document.createElement('button'); undo.type = 'button'; undo.textContent = '撤销'; undo.className = 'btn btn-ghost btn-sm';
+        undo.onclick = async () => {
+          const ids = lastTrashedNotes.map(note => note.server_id || note.id);
+          try {
+            const response = await fetchWithTimeout(`${API_BASE}/api/notes/batch/restore`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ operation_id: uuid(), ids }),
+            });
+            if (!response.ok) throw new Error('restore failed');
+            await loadNotesManagement();
+          } catch (_error) { showToast('撤销失败，请重试', 'error'); }
+        };
+        dom.toast.appendChild(undo); dom.toast.hidden = false;
+      }
+    } catch (error) { showToast('批量操作失败，请重试', 'error'); }
   }
 
   async function loadNotesManagement({ preserveDetail = false } = {}) {
@@ -5010,7 +5140,34 @@
       if (dom.notesSearch.value.trim().length === 1) loadNotesManagement();
     });
     dom.notesPendingOnly?.addEventListener('change', () => updateNotesQuery({ dataScope: dom.notesPendingOnly.value }));
+    dom.notesSelectPage?.addEventListener('change', () => {
+      const pageKeys = notesItems.map(getStableNoteKey).filter(Boolean);
+      pageKeys.forEach(key => dom.notesSelectPage.checked ? notesSelection.add(key) : notesSelection.delete(key));
+      updateNotesSelectionUi();
+    });
+    dom.btnBatchAddTag?.addEventListener('click', () => runSelectedNotesAction('tags'));
+    dom.btnBatchRemoveTag?.addEventListener('click', async () => {
+      const tags = await showNotesConfirm('移除选中笔记中的标签', { tags: true, confirmLabel: '确认移除' });
+      if (tags?.length) {
+        try { await applyNotesBatch('tags', { action: 'remove', tags }); } catch (_error) { showToast('批量操作失败，请重试', 'error'); }
+      }
+    });
+    dom.btnBatchTrash?.addEventListener('click', () => runSelectedNotesAction('trash'));
+    dom.btnBatchRestore?.addEventListener('click', () => runSelectedNotesAction('restore'));
+    dom.btnBatchDelete?.addEventListener('click', () => runSelectedNotesAction('delete'));
+    dom.btnEmptyTrash?.addEventListener('click', async () => {
+      const trash = (await loadOfflineNotes({ ...notesQuery, view: 'trash' })).items;
+      if (!trash.length) return;
+      const confirmed = await showNotesConfirm(`永久删除回收站中的 ${trash.length} 条笔记`, { danger: true, confirmLabel: '确认清空' });
+      if (confirmed !== null) {
+        for (let index = 0; index < trash.length; index += 100) {
+          notesSelection.clear(); trash.slice(index, index + 100).forEach(note => notesSelection.add(getStableNoteKey(note)));
+          try { await applyNotesBatch('delete'); } catch (_error) { showToast('清空回收站失败，已保留已完成批次', 'error'); break; }
+        }
+      }
+    });
     dom.btnNotesTrash?.addEventListener('click', () => requestNotesNavigation(() => updateNotesQuery({ view: notesQuery.view === 'trash' ? 'active' : 'trash' })));
+    dom.btnNotesTrash?.addEventListener('click', () => { if (dom.btnNotesTrash) dom.btnNotesTrash.setAttribute('aria-pressed', String(notesQuery.view === 'trash')); });
     dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });
     dom.notesPrevious?.addEventListener('click', () => { notesQuery.offset = Math.max(0, notesQuery.offset - notesQuery.limit); loadNotesManagement(); });
     dom.notesNext?.addEventListener('click', () => { notesQuery.offset += notesQuery.limit; loadNotesManagement(); });
