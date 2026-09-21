@@ -328,10 +328,14 @@
   }
 
   function dbDelete(storeName, id) {
+    return dbDeleteMany(storeName, [id]);
+  }
+
+  function dbDeleteMany(storeName, ids) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
-      store.delete(id);
+      ids.forEach(id => store.delete(id));
       tx.oncomplete = () => resolve();
       tx.onerror = (e) => reject(e.target.error);
     });
@@ -4792,8 +4796,16 @@
         if (affected <= 0 || affected + unchanged < notes.length) throw new Error('Batch operation affected no notes');
         if (type === 'delete') {
           const deletedKeys = new Set(ids);
+          notes.forEach(note => getNoteAliases(note).forEach(alias => deletedKeys.add(alias)));
           notesItems = notesItems.filter(item => !getNoteAliases(item).some(alias => deletedKeys.has(alias)));
-          await Promise.all(notes.map(note => dbDelete('highlights', note.id)));
+          const [allHighlights, allQueued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
+          const matchesIdentity = item => getNoteAliases(item).some(alias => deletedKeys.has(alias));
+          await dbDeleteMany('highlights', allHighlights.filter(matchesIdentity).map(item => item.id));
+          await Promise.all(allQueued.filter(operation => {
+            const payload = operation.payload || {};
+            return [operation.entity_id, payload.id, payload.server_id, payload.client_id].filter(Boolean)
+              .map(String).some(alias => deletedKeys.has(alias));
+          }).map(operation => dbDelete('sync_queue', operation.id)));
         }
         notes.forEach(note => {
           if (type === 'trash') note.deleted_at = result.deleted_at || new Date().toISOString();
@@ -4911,6 +4923,7 @@
       notesLoadError = error;
       if (!notesLoaded) {
         const fallback = await loadOfflineNotes(requestQuery);
+        if (!isCurrentLoad()) return;
         notesItems = fallback.items;
         notesTotal = fallback.total;
         notesHasMore = false;

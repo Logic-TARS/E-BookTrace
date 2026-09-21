@@ -181,6 +181,13 @@ export async function installNotesApiRoutes(page, state = {}) {
     if (url.pathname === '/api/notes' && method === 'GET') {
       const view = url.searchParams.get('view') || 'active';
       const delay = state.notesGetDelays?.[view]?.shift?.() || 0;
+      if (state.failNotesGet?.[view]) {
+        const failure = state.failNotesGet[view].shift();
+        if (failure) {
+          await route.fulfill({ status: failure.status || 503, json: { detail: failure.detail || 'forced notes failure' } });
+          return;
+        }
+      }
       if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       const offset = Number(url.searchParams.get('offset') || 0);
       const limit = Number(url.searchParams.get('limit') || 50);

@@ -2,7 +2,7 @@
 
 ## 状态
 
-修复轮 4 已实现并提交。本轮修复笔记列表异步刷新覆盖新状态的竞态，并在永久删除成功后同步清理本地 IndexedDB。真实隔离同源验收已执行，但未达到用户要求的完整闭环，故不宣称全部通过。
+修复轮 5 已实现，待提交。本轮补齐了 fallback generation check，并让永久删除按所有 identity aliases 清理 IndexedDB highlights 与 sync_queue。
 
 ## 实现摘要
 
@@ -19,7 +19,9 @@
 
 通过：
 
-- `cd frontend && npm test`：65 passed，exit 0；notes route lifecycle 与 reader same-section 均通过。
+- `cd frontend && npm test`：此前 65 passed；轮 5 新增 2 个回归测试后最终结果待本轮最后执行。
+- `cd frontend && npm test -- tests/notes-management.spec.js --grep "permanent delete removes|stale failed refresh"`：2 passed。
+- `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed，存在既有 aiosqlite event-loop 关闭警告。
 - `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed，存在既有 aiosqlite event-loop 关闭警告。
 - `cd frontend && npm test -- tests/notes-management.spec.js`：35 passed。
 - `cd frontend && npm test -- tests/server-sync.spec.js`：4 passed。
@@ -27,11 +29,11 @@
 - `cd frontend && npm test -- tests/import-ux.spec.js --grep "failed upload|slow server upload"`：2 passed。
 - `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed（存在既有 aiosqlite event-loop 关闭警告）。
 
-真实 FastAPI 隔离验收使用仓库根 `.venv`、临时 DB/BOOKS_DIR/Vault 与两个 browser contexts。已验证 upload、reader sync 创建划线、笔记编辑、A trash、B restore、A active、再次 trash、永久删除后的服务端 active/trash 为空；修复后本地 IndexedDB 删除逻辑也有 focused 覆盖。最终验收脚本在 UI 刷新后重新定位被删除笔记阶段中断，未完成真实下载文件内容、重复删除和完整 UI 消失闭环，因此本报告不宣称完整端到端链路通过。未触碰 `backend/data`，临时脚本已删除。
+真实 FastAPI 隔离验收使用仓库根 `.venv`、临时 DB/BOOKS_DIR/Vault 与两个 browser contexts。轮 5 脚本已完成 upload、reader sync、A 编辑、双 context trash/restore、permanent delete、API active/trash 空记录、IndexedDB identity/queue 清理和重复删除幂等请求验证；但最终脚本在 export 下载事件阶段因脚本导航状态不正确中断，未取得下载文件内容证据，因此报告不宣称完整链路全部通过。未触碰 `backend/data`，临时脚本已删除。
 
 ## 关注点
 
-- 真实同源验收尚未完成最终 UI 消失、下载文件读取、重复删除幂等等闭环步骤；前端和后端自动化套件均通过。
+- 真实同源验收尚未取得最终下载文件读取证据；其余永久删除、双 context UI/API/IDB 清理和重复删除步骤已执行。
 - 本次没有新增或提交敏感文件、EPUB、SQLite、`.env` 或测试产物。
 - 报告按要求保存在本文件。
 
@@ -41,7 +43,7 @@
 
 ## 隔离同源验收状态
 
-部分完成：真实 FastAPI 已用 `G:/Job/Marginalia/.venv/Scripts/python.exe` 和临时 DB/BOOKS_DIR/Vault 启动；两个 browser contexts 已完成 upload → sync → 编辑 → trash → restore → active → trash，服务端状态可核验。最终 permanent delete、Markdown 下载内容和回收站排除尚未完成，原因是临时脚本在页面导航竞态中断。
+部分完成：真实 FastAPI 已用 `G:/Job/Marginalia/.venv/Scripts/python.exe` 和临时 DB/BOOKS_DIR/Vault 启动；两个 browser contexts 已完成 upload → sync → 编辑 → trash → restore → active → trash → permanent delete，并核验双 context UI/API/IDB 清理及重复删除幂等。Markdown 下载按钮和真实下载文件读取尚未取得证据。
 
 ## 旧文案检查
 
@@ -51,7 +53,9 @@
 
 - `git diff --check`：通过。
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
-- 本轮 commit：`8b6bf38 Harden notes refresh and permanent deletion`。
+- `git diff --check`：通过。
+- `git status --short --branch`：`## notes-management-implementation`（干净）。
+- 本轮 commit：`6f7c288 Complete Task 11 identity cleanup`。
 
 ## 额外说明
 

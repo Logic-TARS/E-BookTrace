@@ -671,6 +671,39 @@ test.describe('notes management shell', () => {
     await expect(page.getByRole('button', { name: '永久删除' })).toBeDisabled();
   });
 
+  test('permanent delete removes every identity alias and queued sync operation', async ({ page }) => {
+    const note = makeNote({ id: 'local-note', server_id: 'server-note', client_id: 'client-note', deleted_at: new Date().toISOString() });
+    const state = { notes: [note], batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, {
+      highlights: [note, { ...note, id: 'server-note', synced: false }],
+      operations: [
+        { id: 'queued-client', op_id: 'queued-client', book_id: note.book_id, type: 'highlight.upsert', entity_id: 'client-note', payload: { id: 'local-note', server_id: 'server-note', client_id: 'client-note' } },
+      ],
+    });
+    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await expect(page.getByText('测试划线')).toBeVisible();
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '永久删除' }).click();
+    await page.getByRole('button', { name: '确认永久删除' }).click();
+    expect(await readNotesIndexedDb(page)).toEqual([]);
+    expect(await readSyncQueue(page)).toEqual([]);
+  });
+
+  test('stale failed refresh cannot replace newer offline fallback', async ({ page }) => {
+    const note = makeNote();
+    const state = { notes: [note], failNotesGet: { active: [{ status: 503 }, null] }, notesGetDelays: { active: [250, 0] } };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [note] });
+    await page.reload();
+    await expect(page.getByText('测试划线')).toBeVisible();
+    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await expect(page.getByText('测试划线')).toBeVisible();
+  });
+
   test('legacy offline note is not changed before book validation', async ({ page }) => {
     const legacy = makeNote({ book_id: null });
     await installNotesApiRoutes(page, { notes: [legacy] });
