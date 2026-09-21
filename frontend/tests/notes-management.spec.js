@@ -54,6 +54,29 @@ test.describe('notes management shell', () => {
     expect(params.has('offset')).toBe(false);
   });
 
+  test('highlight-only filter maps to backend note_kind', async ({ page }) => {
+    const state = { notes: [makeNote({ note: '' })], requests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await page.getByLabel('内容类型').selectOption('highlight');
+    await page.waitForTimeout(350);
+    const request = state.requests.find(item => item.pathname === '/api/notes' && new URL('http://localhost' + item.search).searchParams.get('note_kind'));
+    expect(new URL('http://localhost' + request.search).searchParams.get('note_kind')).toBe('highlight_only');
+  });
+
+  test('online Markdown export uses filename star before filename', async ({ page }) => {
+    await installNotesApiRoutes(page, { notes: [makeNote()], markdown: '# test' });
+    await page.route('**/api/notes/export.md**', async route => {
+      await route.fulfill({ status: 200, contentType: 'text/markdown; charset=utf-8', headers: {
+        'content-disposition': "attachment; filename=legacy.md; filename*=UTF-8''preferred-%E6%B5%8B%E8%AF%95.md",
+      }, body: '# test' });
+    });
+    await page.goto('/#/creation');
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出 Markdown' }).click();
+    expect((await downloadPromise).suggestedFilename()).toBe('preferred-测试.md');
+  });
+
   test('online Markdown export downloads the server response', async ({ page }) => {
     await installNotesApiRoutes(page, {
       notes: [makeNote()],
@@ -64,7 +87,7 @@ test.describe('notes management shell', () => {
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出 Markdown' }).click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toMatch(/^Marginalia-笔记-[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$/);
+    expect(download.suggestedFilename()).toBe('Marginalia-notes.md');
   });
 
   test('offline Markdown marks the export as incomplete', async ({ page }) => {
@@ -304,7 +327,7 @@ test.describe('notes management shell', () => {
 
     await page.evaluate(() => { window.__failNextBookPut = true; });
     await page.locator('#btn-nav-create').click();
-    await expect(page.locator('#toast')).toContainText('页面切换失败');
+    await expect.poll(() => page.locator('#toast').textContent()).toContain('页面切换失败');
     await expect(page).toHaveURL(/#\/reader$/);
     await expect(page.locator('#reader-view')).toHaveClass(/active/);
 

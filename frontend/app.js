@@ -1552,8 +1552,8 @@
           progress: 60,
         });
         const uploadPromise = uploadLocalBookInBackground(localRecord, e.target.result);
-        await openBook(localRecord, { skipSync: true });
         uploadPromise.catch(() => {});
+        await openBook(localRecord, { skipSync: true });
       } catch (err) {
         console.error('Import failed:', err);
         setOperationStatus({
@@ -4423,7 +4423,7 @@
     if (q.length >= 2) params.set('q', q);
     if (query.bookId) params.set('book_id', query.bookId);
     if (query.tags?.length) query.tags.forEach(tag => params.append('tag', tag));
-    if (query.noteKind && query.noteKind !== 'all') params.set('note_kind', query.noteKind);
+    if (query.noteKind && query.noteKind !== 'all') params.set('note_kind', query.noteKind === 'highlight' ? 'highlight_only' : query.noteKind);
     if (query.color) params.set('color', query.color);
     if (query.view && query.view !== 'active') params.set('view', query.view);
     if (query.sort) params.set('sort', query.sort);
@@ -4457,7 +4457,7 @@
       if (query.view === 'trash' ? !note.deleted_at : note.deleted_at) return false;
       if (query.bookId && note.book_id !== query.bookId) return false;
       if (query.noteKind === 'reflected' && !note.note) return false;
-      if (query.noteKind === 'highlight' && note.note) return false;
+      if ((query.noteKind === 'highlight' || query.noteKind === 'highlight_only') && note.note) return false;
       if (query.color && note.color !== query.color) return false;
       if (query.tags?.length && !query.tags.every(tag => (note.tags || []).includes(tag))) return false;
       if (q && ![note.highlight_text, note.note, note.book_title, note.book_author, note.chapter, ...(note.tags || [])]
@@ -4983,8 +4983,10 @@
       if (!response.ok) throw new Error(`Server responded with ${response.status}`);
       const content = await response.text();
       const disposition = response.headers.get('content-disposition') || '';
-      const serverFilename = disposition.match(/filename="?([^";]+)"?/i)?.[1];
-      startMarkdownDownload(content, filename || serverFilename);
+      const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const plainFilename = disposition.match(/(?:^|;)\s*filename="?([^";]+)"?/i)?.[1];
+      const serverFilename = encodedFilename ? decodeURIComponent(encodedFilename) : plainFilename;
+      startMarkdownDownload(content, serverFilename || filename);
     } catch (error) {
       showToast('Markdown 导出失败，请重试', 'error');
     }
