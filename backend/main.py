@@ -18,6 +18,11 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from config import settings
 from database import (
+    NoteBatchConflict,
+    batch_delete_notes,
+    batch_restore_notes,
+    batch_trash_notes,
+    batch_update_note_tags,
     init_db,
     upsert_highlights,
     get_all_highlights,
@@ -42,6 +47,9 @@ from models import (
     DraftUpdate,
     HighlightDelete,
     HighlightUpdate,
+    NoteBatchIdsRequest,
+    NoteBatchResult,
+    NoteBatchTagsRequest,
     ObsidianExportRequest,
     QAStreamRequest,
     SyncRequest,
@@ -188,6 +196,43 @@ async def list_notes_endpoint(
         if "cfi" in item:
             item["cfi_range"] = item.pop("cfi")
     return result
+
+
+async def _run_note_batch(operation, request) -> NoteBatchResult:
+    try:
+        result = await operation(**request.model_dump())
+    except NoteBatchConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    await _export_notes()
+    return NoteBatchResult(**result)
+
+
+@app.post("/api/notes/batch/tags", response_model=NoteBatchResult)
+async def batch_note_tags_endpoint(
+    request: NoteBatchTagsRequest,
+) -> NoteBatchResult:
+    return await _run_note_batch(batch_update_note_tags, request)
+
+
+@app.post("/api/notes/batch/trash", response_model=NoteBatchResult)
+async def batch_trash_notes_endpoint(
+    request: NoteBatchIdsRequest,
+) -> NoteBatchResult:
+    return await _run_note_batch(batch_trash_notes, request)
+
+
+@app.post("/api/notes/batch/restore", response_model=NoteBatchResult)
+async def batch_restore_notes_endpoint(
+    request: NoteBatchIdsRequest,
+) -> NoteBatchResult:
+    return await _run_note_batch(batch_restore_notes, request)
+
+
+@app.post("/api/notes/batch/delete", response_model=NoteBatchResult)
+async def batch_delete_notes_endpoint(
+    request: NoteBatchIdsRequest,
+) -> NoteBatchResult:
+    return await _run_note_batch(batch_delete_notes, request)
 
 
 @app.get("/api/materials")

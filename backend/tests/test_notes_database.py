@@ -394,3 +394,230 @@ def test_list_notes_for_export_filters_and_sorts_all_active_matches(notes_db):
         "note-b",
     ]
     assert all(item["deleted_at"] is None for item in result)
+
+
+def test_batch_tags_is_atomic_and_idempotent(notes_db):
+    first = run(
+        database.batch_update_note_tags(
+            operation_id="tags-1",
+            ids=["note-a-new", "note-a-old"],
+            action="add",
+            tags=[" 新标签 ", "新标签"],
+        )
+    )
+    replay = run(
+        database.batch_update_note_tags(
+            operation_id="tags-1",
+            ids=["note-a-new", "note-a-old"],
+            action="add",
+            tags=["新标签"],
+        )
+    )
+
+    assert first == replay
+    assert first["operation_id"] == "tags-1"
+    assert first["affected"] == 2
+    assert first["unchanged"] == 0
+    assert [item["id"] for item in first["items"]] == [
+        "note-a-new",
+        "note-a-old",
+    ]
+    assert all(item["tags"].count("新标签") == 1 for item in first["items"])
+
+
+def test_batch_tags_remove_counts_unchanged_notes(notes_db):
+    result = run(
+        database.batch_update_note_tags(
+            operation_id="tags-remove-1",
+            ids=["note-a-new", "note-blue"],
+            action="remove",
+            tags=["重读"],
+        )
+    )
+
+    assert result["affected"] == 1
+    assert result["unchanged"] == 1
+    assert [item["id"] for item in result["items"]] == ["note-a-new"]
+    assert result["items"][0]["tags"] == ["哲学"]
+
+
+def test_batch_tags_rejects_missing_or_trashed_note_without_partial_update(notes_db):
+    with pytest.raises(database.NoteBatchConflict):
+        run(
+            database.batch_update_note_tags(
+                operation_id="tags-invalid-1",
+                ids=["note-a-new", "note-trash", "missing"],
+                action="add",
+                tags=["不应保存"],
+            )
+        )
+
+    assert "不应保存" not in run(database.get_highlight("note-a-new"))["tags"]
+    retry = run(
+        database.batch_update_note_tags(
+            operation_id="tags-invalid-1",
+            ids=["note-a-new"],
+            action="add",
+            tags=["有效重试"],
+        )
+    )
+    assert retry["affected"] == 1
+
+
+def test_batch_operation_id_collision_rejects_different_request(notes_db):
+    run(
+        database.batch_trash_notes(
+            operation_id="trash-1",
+            ids=["note-a-new"],
+        )
+    )
+
+    with pytest.raises(database.NoteBatchConflict):
+        run(
+            database.batch_trash_notes(
+                operation_id="trash-1",
+                ids=["note-a-old"],
+            )
+        )
+
+
+def test_batch_operation_id_collision_rejects_different_operation_type(notes_db):
+    run(database.batch_trash_notes(operation_id="shared-1", ids=["note-a-new"]))
+
+    with pytest.raises(database.NoteBatchConflict):
+        run(database.batch_restore_notes(operation_id="shared-1", ids=["note-a-new"]))
+
+
+def test_batch_replay_returns_first_result_without_reapplying(notes_db):
+    first = run(
+        database.batch_update_note_tags(
+            operation_id="tags-replay-1",
+            ids=["note-a-new"],
+            action="add",
+            tags=["首次"],
+        )
+    )
+    run(
+        database.batch_update_note_tags(
+            operation_id="tags-later-1",
+            ids=["note-a-new"],
+            action="remove",
+            tags=["首次"],
+        )
+    )
+
+    replay = run(
+        database.batch_update_note_tags(
+            operation_id="tags-replay-1",
+            ids=["note-a-new"],
+            action="add",
+            tags=["首次"],
+        )
+    )
+
+    assert replay == first
+    assert "首次" not in run(database.get_highlight("note-a-new"))["tags"]
+
+
+def test_batch_trash_and_restore_follow_state_rules(notes_db):
+    trashed = run(
+        database.batch_trash_notes(
+            operation_id="trash-state-1",
+            ids=["note-a-new", "note-trash", "missing"],
+        )
+    )
+
+    assert trashed["affected"] == 1
+    assert trashed["unchanged"] == 2
+    assert [item["id"] for item in trashed["items"]] == ["note-a-new"]
+    assert trashed["items"][0]["deleted_at"] is not None
+
+    restored = run(
+        database.batch_restore_notes(
+            operation_id="restore-state-1",
+            ids=["note-a-new", "note-a-old", "missing"],
+        )
+    )
+
+    assert restored["affected"] == 1
+    assert restored["unchanged"] == 2
+    assert [item["id"] for item in restored["items"]] == ["note-a-new"]
+    assert restored["items"][0]["deleted_at"] is None
+
+
+def test_batch_trash_uses_one_utc_timestamp(notes_db):
+    result = run(
+        database.batch_trash_notes(
+            operation_id="trash-time-1",
+            ids=["note-a-new", "note-a-old"],
+        )
+    )
+
+    deleted_at_values = {item["deleted_at"] for item in result["items"]}
+    assert len(deleted_at_values) == 1
+    assert next(iter(deleted_at_values)).endswith("+00:00")
+
+
+def test_batch_delete_rejects_active_note_without_partial_delete(notes_db):
+    with pytest.raises(database.NoteBatchConflict):
+        run(
+            database.batch_delete_notes(
+                operation_id="delete-1",
+                ids=["note-trash", "note-a-new"],
+            )
+        )
+
+    assert run(database.get_highlight("note-a-new")) is not None
+    assert run(database.get_highlight("note-trash")) is not None
+
+
+def test_batch_delete_removes_trashed_notes_and_counts_missing_unchanged(notes_db):
+    result = run(
+        database.batch_delete_notes(
+            operation_id="delete-trash-1",
+            ids=["note-trash", "missing"],
+        )
+    )
+
+    assert result == {
+        "operation_id": "delete-trash-1",
+        "affected": 1,
+        "unchanged": 1,
+        "items": [
+            {
+                "id": "note-trash",
+                "client_id": "",
+                "book_id": "book-a",
+                "tags": ["哲学"],
+                "deleted_at": "2026-03-01T00:00:00Z",
+            }
+        ],
+    }
+    assert run(database.get_highlight("note-trash")) is None
+
+
+def test_batch_mutation_and_idempotency_result_share_one_transaction(notes_db):
+    connection = sqlite3.connect(notes_db)
+    connection.execute(
+        """
+        CREATE TRIGGER fail_batch_result
+        BEFORE INSERT ON note_batch_operations
+        BEGIN
+            SELECT RAISE(ABORT, 'forced result failure');
+        END
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced result failure"):
+        run(
+            database.batch_update_note_tags(
+                operation_id="tags-rollback-1",
+                ids=["note-a-new"],
+                action="add",
+                tags=["必须回滚"],
+            )
+        )
+
+    assert "必须回滚" not in run(database.get_highlight("note-a-new"))["tags"]

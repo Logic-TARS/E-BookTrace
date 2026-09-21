@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -11,6 +13,7 @@ import uuid
 import aiosqlite
 
 from config import settings
+from notes import normalize_note_tags
 
 # Ensure data directory exists
 DB_PATH = Path(__file__).parent / "data" / "marginalia.db"
@@ -723,6 +726,316 @@ async def delete_highlight(identifier: str, legacy_match: Optional[dict] = None)
 
         await db.commit()
         return deleted > 0
+
+
+class NoteBatchConflict(Exception):
+    pass
+
+
+def _normalize_note_ids(ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(value.strip() for value in ids if value.strip()))
+
+
+def _batch_request_hash(operation_type: str, request: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        {"operation_type": operation_type, **request},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+async def _existing_batch_result(
+    db: aiosqlite.Connection,
+    *,
+    operation_id: str,
+    operation_type: str,
+    request_hash: str,
+) -> dict[str, Any] | None:
+    row = await db.execute_fetchall(
+        "SELECT operation_type, request_hash, result_json "
+        "FROM note_batch_operations WHERE operation_id = ?",
+        (operation_id,),
+    )
+    if not row:
+        return None
+    if row[0][0] != operation_type or row[0][1] != request_hash:
+        raise NoteBatchConflict("operation_id already belongs to a different request")
+    return json.loads(row[0][2])
+
+
+async def _save_batch_result(
+    db: aiosqlite.Connection,
+    *,
+    operation_id: str,
+    operation_type: str,
+    request_hash: str,
+    result: dict[str, Any],
+) -> None:
+    await db.execute(
+        """
+        INSERT INTO note_batch_operations (
+            operation_id, operation_type, request_hash, result_json, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            operation_id,
+            operation_type,
+            request_hash,
+            json.dumps(result, ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+
+def _batch_item(row: aiosqlite.Row, *, tags: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "client_id": row["client_id"] or "",
+        "book_id": row["book_id"],
+        "tags": _row_json_list(row["tags"]) if tags is None else tags,
+        "deleted_at": row["deleted_at"],
+    }
+
+
+async def _load_batch_rows(
+    db: aiosqlite.Connection, ids: list[str]
+) -> dict[str, aiosqlite.Row]:
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = await db.execute_fetchall(
+        f"SELECT * FROM highlights WHERE id IN ({placeholders})",
+        ids,
+    )
+    return {row["id"]: row for row in rows}
+
+
+async def batch_update_note_tags(
+    *, operation_id: str, ids: list[str], action: str, tags: list[str]
+) -> dict[str, Any]:
+    normalized_ids = _normalize_note_ids(ids)
+    normalized_tags = normalize_note_tags(tags)
+    request = {
+        "ids": normalized_ids,
+        "action": action,
+        "tags": normalized_tags,
+    }
+    operation_type = "tags"
+    request_hash = _batch_request_hash(operation_type, request)
+
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            replay = await _existing_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                await db.commit()
+                return replay
+
+            rows = await _load_batch_rows(db, normalized_ids)
+            invalid_ids = [
+                note_id
+                for note_id in normalized_ids
+                if note_id not in rows or rows[note_id]["deleted_at"] is not None
+            ]
+            if invalid_ids:
+                raise NoteBatchConflict(
+                    "tags require active notes: " + ", ".join(invalid_ids)
+                )
+
+            items = []
+            unchanged = 0
+            now = datetime.now(timezone.utc).isoformat()
+            for note_id in normalized_ids:
+                row = rows[note_id]
+                existing_tags = normalize_note_tags(_row_json_list(row["tags"]))
+                if action == "add":
+                    updated_tags = normalize_note_tags([*existing_tags, *normalized_tags])
+                elif action == "remove":
+                    removed = set(normalized_tags)
+                    updated_tags = [tag for tag in existing_tags if tag not in removed]
+                else:
+                    raise NoteBatchConflict("unsupported tag action")
+
+                if updated_tags == existing_tags:
+                    unchanged += 1
+                    continue
+                await db.execute(
+                    "UPDATE highlights SET tags = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(updated_tags, ensure_ascii=False), now, note_id),
+                )
+                items.append(_batch_item(row, tags=updated_tags))
+
+            result = {
+                "operation_id": operation_id,
+                "affected": len(items),
+                "unchanged": unchanged,
+                "items": items,
+            }
+            await _save_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+                result=result,
+            )
+            await db.commit()
+            return result
+        except BaseException:
+            await db.rollback()
+            raise
+
+
+async def _batch_set_deleted_at(
+    *, operation_id: str, ids: list[str], restore: bool
+) -> dict[str, Any]:
+    normalized_ids = _normalize_note_ids(ids)
+    operation_type = "restore" if restore else "trash"
+    request_hash = _batch_request_hash(operation_type, {"ids": normalized_ids})
+
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            replay = await _existing_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                await db.commit()
+                return replay
+
+            rows = await _load_batch_rows(db, normalized_ids)
+            timestamp = None if restore else datetime.now(timezone.utc).isoformat()
+            items = []
+            unchanged = 0
+            for note_id in normalized_ids:
+                row = rows.get(note_id)
+                should_change = row is not None and (
+                    row["deleted_at"] is not None if restore else row["deleted_at"] is None
+                )
+                if not should_change:
+                    unchanged += 1
+                    continue
+                await db.execute(
+                    "UPDATE highlights SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                    (timestamp, datetime.now(timezone.utc).isoformat(), note_id),
+                )
+                item = _batch_item(row)
+                item["deleted_at"] = timestamp
+                items.append(item)
+
+            result = {
+                "operation_id": operation_id,
+                "affected": len(items),
+                "unchanged": unchanged,
+                "items": items,
+            }
+            await _save_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+                result=result,
+            )
+            await db.commit()
+            return result
+        except BaseException:
+            await db.rollback()
+            raise
+
+
+async def batch_trash_notes(
+    *, operation_id: str, ids: list[str]
+) -> dict[str, Any]:
+    return await _batch_set_deleted_at(
+        operation_id=operation_id,
+        ids=ids,
+        restore=False,
+    )
+
+
+async def batch_restore_notes(
+    *, operation_id: str, ids: list[str]
+) -> dict[str, Any]:
+    return await _batch_set_deleted_at(
+        operation_id=operation_id,
+        ids=ids,
+        restore=True,
+    )
+
+
+async def batch_delete_notes(
+    *, operation_id: str, ids: list[str]
+) -> dict[str, Any]:
+    normalized_ids = _normalize_note_ids(ids)
+    operation_type = "delete"
+    request_hash = _batch_request_hash(operation_type, {"ids": normalized_ids})
+
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            replay = await _existing_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                await db.commit()
+                return replay
+
+            rows = await _load_batch_rows(db, normalized_ids)
+            active_ids = [
+                note_id
+                for note_id in normalized_ids
+                if note_id in rows and rows[note_id]["deleted_at"] is None
+            ]
+            if active_ids:
+                raise NoteBatchConflict(
+                    "delete requires trashed notes: " + ", ".join(active_ids)
+                )
+
+            items = [
+                _batch_item(rows[note_id])
+                for note_id in normalized_ids
+                if note_id in rows
+            ]
+            if items:
+                placeholders = ",".join("?" for _ in items)
+                await db.execute(
+                    f"DELETE FROM highlights WHERE id IN ({placeholders})",
+                    [item["id"] for item in items],
+                )
+
+            result = {
+                "operation_id": operation_id,
+                "affected": len(items),
+                "unchanged": len(normalized_ids) - len(items),
+                "items": items,
+            }
+            await _save_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+                result=result,
+            )
+            await db.commit()
+            return result
+        except BaseException:
+            await db.rollback()
+            raise
 
 
 def _row_to_dict(row: aiosqlite.Row) -> dict:

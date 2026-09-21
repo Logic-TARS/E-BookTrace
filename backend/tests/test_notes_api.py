@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 
 import pytest
@@ -194,3 +195,123 @@ def test_list_notes_endpoint_rejects_one_character_search(client, query):
 )
 def test_list_notes_endpoint_rejects_invalid_parameters(client, params):
     assert client.get("/api/notes", params=params).status_code == 422
+
+
+def test_batch_tags_endpoint_returns_uniform_result(client, seeded_notes):
+    response = client.post(
+        "/api/notes/batch/tags",
+        json={
+            "operation_id": "api-tags-1",
+            "ids": ["note-match", "note-one-tag"],
+            "action": "add",
+            "tags": [" 新标签 ", "新标签"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {
+        "operation_id",
+        "affected",
+        "unchanged",
+        "items",
+    }
+    assert payload["operation_id"] == "api-tags-1"
+    assert payload["affected"] == 2
+    assert payload["unchanged"] == 0
+    assert [item["id"] for item in payload["items"]] == [
+        "note-match",
+        "note-one-tag",
+    ]
+    assert all(item["tags"][-1] == "新标签" for item in payload["items"])
+
+
+def test_batch_endpoints_support_trash_restore_and_delete(client, seeded_notes):
+    trashed = client.post(
+        "/api/notes/batch/trash",
+        json={"operation_id": "api-trash-1", "ids": ["note-match"]},
+    )
+    restored = client.post(
+        "/api/notes/batch/restore",
+        json={"operation_id": "api-restore-1", "ids": ["note-match"]},
+    )
+    client.post(
+        "/api/notes/batch/trash",
+        json={"operation_id": "api-trash-2", "ids": ["note-match"]},
+    )
+    deleted = client.post(
+        "/api/notes/batch/delete",
+        json={"operation_id": "api-delete-1", "ids": ["note-match"]},
+    )
+
+    assert trashed.status_code == 200
+    assert trashed.json()["affected"] == 1
+    assert restored.status_code == 200
+    assert restored.json()["items"][0]["deleted_at"] is None
+    assert deleted.status_code == 200
+    assert deleted.json()["affected"] == 1
+    assert client.get("/api/highlights/note-match").status_code == 404
+
+
+def test_batch_endpoint_maps_operation_id_collision_to_409(client, seeded_notes):
+    first = client.post(
+        "/api/notes/batch/trash",
+        json={"operation_id": "api-collision-1", "ids": ["note-match"]},
+    )
+    collision = client.post(
+        "/api/notes/batch/trash",
+        json={"operation_id": "api-collision-1", "ids": ["note-one-tag"]},
+    )
+
+    assert first.status_code == 200
+    assert collision.status_code == 409
+
+
+def test_batch_endpoint_rejects_more_than_100_ids(client):
+    response = client.post(
+        "/api/notes/batch/trash",
+        json={
+            "operation_id": "api-too-many-ids",
+            "ids": [f"note-{index}" for index in range(101)],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_batch_endpoint_refreshes_legacy_json_export(client, seeded_notes, tmp_path, monkeypatch):
+    export_path = tmp_path / "notes.json"
+    monkeypatch.setattr(database, "NOTES_JSON_PATH", export_path)
+
+    response = client.post(
+        "/api/notes/batch/tags",
+        json={
+            "operation_id": "api-export-1",
+            "ids": ["note-match"],
+            "action": "add",
+            "tags": ["已导出"],
+        },
+    )
+
+    assert response.status_code == 200
+    exported = json.loads(export_path.read_text(encoding="utf-8"))
+    matching = [item for item in exported if item["highlight_text"] == "思想自由"]
+    assert matching[0]["tags"] == ["哲学", "重读", "已导出"]
+
+
+def test_batch_delete_endpoint_rejects_active_note_without_deleting_trash(client, seeded_notes):
+    client.post(
+        "/api/notes/batch/trash",
+        json={"operation_id": "api-trash-before-delete", "ids": ["note-match"]},
+    )
+
+    response = client.post(
+        "/api/notes/batch/delete",
+        json={
+            "operation_id": "api-delete-conflict",
+            "ids": ["note-match", "note-one-tag"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert client.get("/api/highlights/note-match").status_code == 200
