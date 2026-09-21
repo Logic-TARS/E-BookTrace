@@ -125,6 +125,44 @@ def seeded_notes(notes_db):
             "2026-02-02T00:00:00Z",
             None,
         ),
+        (
+            "note-other-book",
+            "client-other-book",
+            "book-b",
+            "书乙",
+            "作者乙",
+            "第一章",
+            "epubcfi(/6/6)",
+            10,
+            "另一册的划线",
+            "",
+            '["哲学"]',
+            "green",
+            "raw",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "2026-02-01T00:00:00Z",
+            None,
+        ),
+        (
+            "note-trashed",
+            "client-trashed",
+            "book-a",
+            "庄子",
+            "庄周",
+            "人间世",
+            "epubcfi(/6/8)",
+            40,
+            "回收站内容",
+            "不应导出",
+            '["哲学"]',
+            "yellow",
+            "reflected",
+            "2026-01-04T00:00:00Z",
+            "2026-01-04T00:00:00Z",
+            "2026-02-04T00:00:00Z",
+            "2026-03-04T00:00:00Z",
+        ),
     ]
     connection = sqlite3.connect(notes_db)
     connection.executemany(
@@ -140,6 +178,38 @@ def seeded_notes(notes_db):
     connection.commit()
     connection.close()
     return rows
+
+
+def test_export_notes_markdown_uses_filters_and_download_headers(client, seeded_notes):
+    response = client.get(
+        "/api/notes/export.md",
+        params=[("book_id", "book-a"), ("tag", "哲学")],
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/markdown; charset=utf-8"
+    disposition = response.headers["content-disposition"]
+    assert "attachment" in disposition
+    assert "filename=Marginalia-notes.md" in disposition
+    assert "filename*=UTF-8''Marginalia-%E7%AC%94%E8%AE%B0-" in disposition
+    assert disposition.endswith(".md")
+    assert "庄子" in response.text
+    assert "书乙" not in response.text
+    assert "回收站内容" not in response.text
+
+
+def test_export_notes_markdown_rejects_empty_result(client):
+    response = client.get("/api/notes/export.md", params={"book_id": "missing"})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "当前筛选条件下没有可导出的笔记"
+
+
+def test_export_notes_markdown_rejects_list_only_parameters(client, seeded_notes):
+    for parameter in ("limit", "offset", "view", "sort"):
+        response = client.get("/api/notes/export.md", params={parameter: "1"})
+
+        assert response.status_code == 422
 
 
 def test_list_notes_endpoint_validates_query_and_returns_facets(client, seeded_notes):

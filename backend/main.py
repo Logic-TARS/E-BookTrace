@@ -7,12 +7,13 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 from typing import Literal, Optional
+from urllib.parse import quote
 
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -37,6 +38,7 @@ from database import (
     update_draft,
     delete_draft,
     list_notes,
+    list_notes_for_export,
 )
 from models import (
     BookSyncRequest,
@@ -59,6 +61,7 @@ from models import (
 )
 from books_api import serve_book
 from database import export_all_to_json
+from notes import notes_markdown_filename, render_notes_markdown
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("marginalia")
@@ -645,6 +648,45 @@ async def get_book(filename: str):
 
 
 # ── Notes export ──────────────────────────────────────
+@app.get("/api/notes/export.md")
+async def export_notes_markdown(
+    request: Request,
+    q: Optional[str] = None,
+    book_id: Optional[str] = None,
+    tag: list[str] = Query(default=[]),
+    note_kind: Literal["all", "reflected", "highlight_only"] = "all",
+    color: Optional[Literal["yellow", "green", "blue", "pink"]] = None,
+):
+    allowed_parameters = {"q", "book_id", "tag", "note_kind", "color"}
+    if any(key not in allowed_parameters for key in request.query_params):
+        raise HTTPException(status_code=422, detail="不支持的导出筛选参数")
+
+    normalized_query = q.strip() if q else None
+    if normalized_query and len(normalized_query) < 2:
+        raise HTTPException(status_code=422, detail="搜索关键词至少需要 2 个字符")
+    notes = await list_notes_for_export(
+        q=normalized_query,
+        book_id=book_id,
+        tags=tag,
+        note_kind=note_kind,
+        color=color,
+    )
+    if not notes:
+        raise HTTPException(status_code=422, detail="当前筛选条件下没有可导出的笔记")
+
+    filename = notes_markdown_filename()
+    return Response(
+        content=render_notes_markdown(notes, offline=False),
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=Marginalia-notes.md; "
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        },
+    )
+
+
 @app.get("/api/notes/export")
 async def export_notes():
     """Export all highlights as a standard JSON file."""
