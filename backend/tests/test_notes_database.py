@@ -243,21 +243,70 @@ def test_list_notes_search_falls_back_when_fts_is_unavailable(notes_db, monkeypa
     assert [item["id"] for item in result["items"]] == ["note-b"]
 
 
-def test_list_notes_search_uses_fts_when_available(notes_db, monkeypatch):
-    used_fts = False
-    original = database._build_notes_where
+def test_list_notes_search_executes_fts_match_when_available(notes_db, monkeypatch):
+    connection = sqlite3.connect(notes_db)
+    try:
+        connection.execute(
+            "CREATE VIRTUAL TABLE temp.trigram_probe "
+            "USING fts5(value, tokenize='trigram')"
+        )
+        connection.execute("INSERT INTO trigram_probe(value) VALUES (?)", ("思想训练",))
+        capability_result = connection.execute(
+            "SELECT value FROM trigram_probe WHERE trigram_probe MATCH ?",
+            ('"思想训练"',),
+        ).fetchone()
+    except sqlite3.OperationalError as exc:
+        pytest.skip(f"FTS5 trigram unavailable: {exc}")
+    finally:
+        connection.close()
+    assert capability_result == ("思想训练",)
 
-    def track_fts(**kwargs):
-        nonlocal used_fts
-        used_fts = used_fts or kwargs["use_fts"]
-        return original(**kwargs)
+    successful_match_queries = []
+    original = database.aiosqlite.Connection._execute_fetchall
 
-    monkeypatch.setattr(database, "_build_notes_where", track_fts)
+    def track_successful_match(self, sql, parameters):
+        rows = original(self, sql, parameters)
+        if " MATCH ?" in sql:
+            successful_match_queries.append(sql)
+        return rows
+
+    monkeypatch.setattr(
+        database.aiosqlite.Connection,
+        "_execute_fetchall",
+        track_successful_match,
+    )
 
     result = run(database.list_notes(q="思想训练"))
 
     assert [item["id"] for item in result["items"]] == ["note-b"]
-    assert used_fts is True
+    assert successful_match_queries
+
+
+def test_list_notes_search_falls_back_when_match_execution_fails(notes_db, monkeypatch):
+    async def available(_db, _q):
+        return True
+
+    match_attempts = 0
+    original = database.aiosqlite.Connection._execute_fetchall
+
+    def fail_match_execution(self, sql, parameters):
+        nonlocal match_attempts
+        if " MATCH ?" in sql:
+            match_attempts += 1
+            raise sqlite3.OperationalError("unable to use function MATCH")
+        return original(self, sql, parameters)
+
+    monkeypatch.setattr(database, "_notes_fts_available", available)
+    monkeypatch.setattr(
+        database.aiosqlite.Connection,
+        "_execute_fetchall",
+        fail_match_execution,
+    )
+
+    result = run(database.list_notes(q="思想训练"))
+
+    assert match_attempts == 1
+    assert [item["id"] for item in result["items"]] == ["note-b"]
 
 
 def test_list_notes_filter_multi_tag_uses_and_semantics(notes_db):
