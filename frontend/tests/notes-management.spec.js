@@ -25,6 +25,33 @@ test.describe('notes management shell', () => {
     await expect(page.locator('#draft-editor, #draft-list, #btn-generate-video, #btn-generate-article')).toHaveCount(0);
   });
 
+  test('online Markdown export sends current filters without pagination', async ({ page }) => {
+    const state = { notes: [makeNote()], requests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await page.getByLabel('搜索笔记').fill('测试');
+    await page.locator('#notes-book-filter').selectOption('book-1');
+    await page.locator('#notes-tag-filter').selectOption('阅读');
+    await page.getByLabel('内容类型').selectOption('reflected');
+    await page.getByLabel('高亮颜色').selectOption('yellow');
+    await page.waitForTimeout(350);
+    state.requests.length = 0;
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出 Markdown' }).click();
+    await downloadPromise;
+    const request = state.requests.find(item => item.pathname === '/api/notes/export.md');
+    expect(request).toBeTruthy();
+    const params = new URL('http://localhost' + request.search).searchParams;
+    expect(params.get('q')).toBe('测试');
+    expect(params.get('book_id')).toBe('book-1');
+    expect(params.get('tag')).toBe('阅读');
+    expect(params.get('note_kind')).toBe('reflected');
+    expect(params.get('color')).toBe('yellow');
+    expect(params.has('limit')).toBe(false);
+    expect(params.has('offset')).toBe(false);
+  });
+
   test('online Markdown export downloads the server response', async ({ page }) => {
     await installNotesApiRoutes(page, {
       notes: [makeNote()],

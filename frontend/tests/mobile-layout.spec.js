@@ -280,16 +280,24 @@ test.describe('@mobile mobile layout', () => {
     await page.locator('#btn-nav-create').click();
     await expect(page.locator('#creation-view')).toHaveClass(/active/);
     await expect(page.getByText('移动测试划线')).toBeVisible();
-    await page.getByText('移动测试划线').click();
+    const trigger = page.locator('.note-management-card-button');
+    await trigger.click();
     await expect(page.locator('#notes-detail-pane')).toBeVisible();
+    await expect(page.locator('#btn-close-managed-note')).toBeFocused();
     const detail = await page.locator('#notes-detail-pane').evaluate(element => {
       const rect = element.getBoundingClientRect();
       return { width: rect.width, height: rect.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
     });
     expect(detail.width).toBeGreaterThanOrEqual(detail.viewportWidth - 2);
     expect(detail.height).toBeGreaterThanOrEqual(detail.viewportHeight - 2);
+    await page.keyboard.press('Tab');
+    await expect(page.locator('#notes-detail-pane')).toHaveAttribute('aria-modal', 'true');
+    expect(await page.locator('#notes-detail-pane').evaluate(element => element.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.locator('#btn-close-managed-note')).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(page.locator('#notes-detail-pane')).toBeHidden();
+    await expect(trigger).toBeFocused();
   });
 
   test('keeps the app shell and workspace inside the safe viewport', async ({ page }) => {

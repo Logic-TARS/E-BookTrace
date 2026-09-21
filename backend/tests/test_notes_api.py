@@ -198,6 +198,19 @@ def test_export_notes_markdown_uses_filters_and_download_headers(client, seeded_
     assert "回收站内容" not in response.text
 
 
+def test_export_notes_markdown_filters_query_and_returns_all_active_rows(client, seeded_notes):
+    response = client.get(
+        '/api/notes/export.md',
+        params=[('q', '思想'), ('note_kind', 'reflected'), ('color', 'yellow')],
+    )
+
+    assert response.status_code == 200
+    assert '思想自由' in response.text
+    assert '思想之旅' in response.text
+    assert '另一册的划线' not in response.text
+    assert '回收站内容' not in response.text
+
+
 def test_export_notes_markdown_rejects_empty_result(client):
     response = client.get("/api/notes/export.md", params={"book_id": "missing"})
 

@@ -1734,6 +1734,8 @@ body.reader-chrome-hidden .app-nav {
 .notes-management-list {
   min-height: 340px;
   flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .note-management-card {
@@ -2516,6 +2518,7 @@ body.reader-chrome-hidden .reader-chrome-reveal {
 
   .notes-list-pane {
     min-height: 360px;
+    max-height: calc(100dvh - var(--mobile-nav-height) - 220px);
   }
 
   .notes-detail-pane {

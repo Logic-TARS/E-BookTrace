@@ -97,6 +97,7 @@
   let managedNoteUndo = null;
   let managedNoteUndoTimer = null;
   let lastTrashedNotes = [];
+  let managedNoteTrigger = null;
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -4420,7 +4421,7 @@
     const q = String(query.q || '').trim();
     if (q.length >= 2) params.set('q', q);
     if (query.bookId) params.set('book_id', query.bookId);
-    if (query.tags?.length) params.set('tags', query.tags.join(','));
+    if (query.tags?.length) query.tags.forEach(tag => params.append('tag', tag));
     if (query.noteKind && query.noteKind !== 'all') params.set('note_kind', query.noteKind);
     if (query.color) params.set('color', query.color);
     if (query.view && query.view !== 'active') params.set('view', query.view);
@@ -4570,9 +4571,13 @@
     const note = managedNoteDraft;
     if (!note || !dom.notesDetailPane) return;
     dom.notesDetailPane.classList.add('is-open');
+    dom.notesDetailPane.setAttribute('tabindex', '-1');
+    dom.notesDetailPane.setAttribute('role', 'dialog');
+    dom.notesDetailPane.setAttribute('aria-modal', 'true');
+    dom.notesDetailPane.setAttribute('aria-labelledby', 'managed-note-title');
     dom.notesDetailPane.innerHTML = `
       <div class="notes-detail-content">
-        <div class="notes-detail-heading"><h2>笔记详情</h2><button class="btn btn-ghost btn-sm" id="btn-close-managed-note" type="button">关闭</button></div>
+        <div class="notes-detail-heading"><h2 id="managed-note-title" tabindex="-1">笔记详情</h2><button class="btn btn-ghost btn-sm" id="btn-close-managed-note" type="button">关闭</button></div>
         <label>划线原文<textarea aria-label="划线原文" readonly>${escapeHTML(note.highlight_text || '')}</textarea></label>
         <label>书名<input readonly value="${escapeHTML(note.book_title || '')}"></label>
         <label>作者<input readonly value="${escapeHTML(note.book_author || '')}"></label>
@@ -4592,6 +4597,7 @@
     $('#btn-save-managed-note').addEventListener('click', saveManagedNoteDraft);
     $('#btn-delete-managed-reflection').addEventListener('click', deleteManagedNoteReflection);
     $('#btn-close-managed-note').addEventListener('click', () => requestNotesNavigation(() => closeManagedNote()));
+    setTimeout(() => $('#btn-close-managed-note')?.focus(), 0);
   }
 
   function closeManagedNote() {
@@ -4599,11 +4605,19 @@
     managedNoteOriginal = null;
     if (dom.notesDetailPane) {
       dom.notesDetailPane.classList.remove('is-open');
+      dom.notesDetailPane.removeAttribute('role');
+      dom.notesDetailPane.removeAttribute('aria-modal');
+      dom.notesDetailPane.removeAttribute('aria-labelledby');
+      dom.notesDetailPane.removeAttribute('tabindex');
       dom.notesDetailPane.innerHTML = '<div class="empty-state"><p>选择一条笔记查看详情</p></div>';
     }
+    const trigger = managedNoteTrigger;
+    managedNoteTrigger = null;
+    if (trigger && document.contains(trigger)) safeFocus(trigger);
   }
 
   async function openManagedNote(note) {
+    managedNoteTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     managedNoteOriginal = createManagedNoteDraft(note);
     managedNoteDraft = createManagedNoteDraft(note);
     renderManagedNoteDetail();
@@ -5270,16 +5284,34 @@
       }
     });
     dom.btnExportNotesMarkdown?.addEventListener('click', exportNotesMarkdown);
-    if (dom.btnExportNotesMarkdown) dom.btnExportNotesMarkdown.disabled = false;
+    if (dom.btnExportNotesMarkdown) {
+      dom.btnExportNotesMarkdown.disabled = notesQuery.view === 'trash' || notesQuery.dataScope === 'pending';
+    }
     dom.btnNotesTrash?.addEventListener('click', () => requestNotesNavigation(() => updateNotesQuery({ view: notesQuery.view === 'trash' ? 'active' : 'trash' })));
     dom.btnNotesTrash?.addEventListener('click', () => { if (dom.btnNotesTrash) dom.btnNotesTrash.setAttribute('aria-pressed', String(notesQuery.view === 'trash')); });
     dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });
     dom.notesPrevious?.addEventListener('click', () => { notesQuery.offset = Math.max(0, notesQuery.offset - notesQuery.limit); loadNotesManagement(); });
     dom.notesNext?.addEventListener('click', () => { notesQuery.offset += notesQuery.limit; loadNotesManagement(); });
     document.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape' || !managedNoteDraft) return;
-      event.preventDefault();
-      requestNotesNavigation(() => closeManagedNote());
+      if (!managedNoteDraft || !dom.notesDetailPane?.classList.contains('is-open')) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        requestNotesNavigation(() => closeManagedNote());
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...dom.notesDetailPane.querySelectorAll('button, input, textarea, select')]
+        .filter(element => !element.disabled && !element.hidden);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     });
     window.addEventListener('hashchange', () => requestNotesNavigation(applyCurrentRoute));
     window.addEventListener('popstate', () => requestNotesNavigation(applyCurrentRoute));
