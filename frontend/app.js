@@ -4488,11 +4488,14 @@
     items.forEach(note => {
       if (note.book_id) books.set(note.book_id, { id: note.book_id, title: note.book_title || note.book_id });
     });
+    const tags = [...new Set(items.flatMap(note => note.tags || []))];
+    const noteKinds = [...new Set(items.map(note => note.note ? 'reflected' : 'highlight'))];
+    const colors = [...new Set(items.map(note => note.color).filter(Boolean))];
     return {
       books: [...books.values()],
-      tags: [...new Set(items.flatMap(note => note.tags || []))],
-      note_kinds: [...new Set(items.map(note => note.note ? 'reflected' : 'highlight'))],
-      colors: [...new Set(items.map(note => note.color).filter(Boolean))],
+      tags: tags.map(name => ({ name, count: items.filter(note => (note.tags || []).includes(name)).length })),
+      note_kinds: noteKinds.map(name => ({ name, count: items.filter(note => (note.note ? 'reflected' : 'highlight') === name).length })),
+      colors: colors.map(name => ({ name, count: items.filter(note => note.color === name).length })),
     };
   }
 
@@ -4534,8 +4537,15 @@
       const key = operationAliases.map(alias => aliases.get(alias) || alias).find(Boolean);
       if (!key) return;
       operationAliases.forEach(alias => aliases.set(alias, key));
-      if (operation.type.endsWith('.delete') || operation.type.endsWith('.trash')) merged.delete(key);
-      else merged.set(key, { ...merged.get(key), ...payload, synced: false });
+      if (operation.type.endsWith('.delete')) merged.delete(key);
+      else if (operation.type.endsWith('.trash')) {
+        const current = merged.get(key);
+        if (query.view === 'trash') merged.set(key, { ...current, ...payload, deleted_at: payload.deleted_at || current?.deleted_at || new Date().toISOString(), synced: false });
+        else merged.delete(key);
+      } else if (operation.type.endsWith('.restore')) {
+        if (query.view === 'trash') merged.delete(key);
+        else merged.set(key, { ...merged.get(key), ...payload, deleted_at: null, synced: false });
+      } else merged.set(key, { ...merged.get(key), ...payload, synced: false });
     });
     return [...merged.values()];
   }
@@ -4553,8 +4563,8 @@
       if ([...element.options].some(option => option.value === current)) element.value = current;
     };
     fill(dom.notesBookFilter, facets.books, 'id', 'title');
-    fill(dom.notesTagFilter, facets.tags, 'value', 'label');
-    fill(dom.notesColorFilter, facets.colors, 'value', 'label');
+    fill(dom.notesTagFilter, facets.tags, 'name', 'name');
+    fill(dom.notesColorFilter, facets.colors, 'name', 'name');
   }
 
   function normalizeTagsInput(value) {
@@ -4807,14 +4817,21 @@
               .map(String).some(alias => deletedKeys.has(alias));
           }).map(operation => dbDelete('sync_queue', operation.id)));
         }
-        notes.forEach(note => {
-          if (type === 'trash') note.deleted_at = result.deleted_at || new Date().toISOString();
-          if (type === 'restore') note.deleted_at = null;
-          if (type === 'tags') note.tags = payload.action === 'add'
-            ? [...new Set([...(note.tags || []), ...payload.tags])]
-            : (note.tags || []).filter(tag => !payload.tags.includes(tag));
-          note.synced = true;
-        });
+        for (const note of notes) {
+          const updated = { ...note };
+          if (type === 'trash') updated.deleted_at = result.deleted_at || new Date().toISOString();
+          if (type === 'restore') updated.deleted_at = null;
+          if (type === 'tags') updated.tags = payload.action === 'add'
+            ? [...new Set([...(updated.tags || []), ...payload.tags])]
+            : (updated.tags || []).filter(tag => !payload.tags.includes(tag));
+          updated.synced = true;
+          if (type === 'delete') {
+            const localHighlights = await dbGetAllSafe('highlights');
+            await dbDeleteMany('highlights', localHighlights.filter(item => getNoteAliases(item).some(alias => getNoteAliases(note).includes(alias))).map(item => item.id));
+          } else {
+            await dbPut('highlights', updated);
+          }
+        }
       } catch (error) {
         if (navigator.onLine) {
           await loadNotesManagement();

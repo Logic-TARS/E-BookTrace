@@ -2,7 +2,7 @@
 
 ## 状态
 
-修复轮 5 已实现，待提交。本轮补齐了 fallback generation check，并让永久删除按所有 identity aliases 清理 IndexedDB highlights 与 sync_queue。
+最终统一修复波次已实现，待提交。本轮修正排序、颜色与 facets 契约，补齐在线 batch 的 IndexedDB 持久更新、pending trash/restore 视图语义和所有 identity aliases 清理。
 
 ## 实现摘要
 
@@ -19,15 +19,12 @@
 
 通过：
 
-- `cd frontend && npm test`：此前 65 passed；轮 5 新增 2 个回归测试后最终结果待本轮最后执行。
-- `cd frontend && npm test -- tests/notes-management.spec.js --grep "permanent delete removes|stale failed refresh"`：2 passed。
-- `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed，存在既有 aiosqlite event-loop 关闭警告。
-- `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed，存在既有 aiosqlite event-loop 关闭警告。
-- `cd frontend && npm test -- tests/notes-management.spec.js`：35 passed。
+- `cd frontend && npm test -- tests/notes-management.spec.js`：41 passed。
 - `cd frontend && npm test -- tests/server-sync.spec.js`：4 passed。
 - `cd frontend && npm test -- tests/mobile-layout.spec.js --project=mobile-chromium`：12 passed。
 - `cd frontend && npm test -- tests/import-ux.spec.js --grep "failed upload|slow server upload"`：2 passed。
-- `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed（存在既有 aiosqlite event-loop 关闭警告）。
+- `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed，21 个既有 aiosqlite/event-loop 警告。
+- `cd frontend && npm test`：70 passed，1 个既有 AI citation 跳转测试失败（静态服务器收到 sync 501 后仍停留 Chapter 1），与本波次改动无关；不得宣称全套通过。
 
 真实 FastAPI 隔离验收使用仓库根 `.venv`、临时 DB/BOOKS_DIR/Vault 与两个 browser contexts。轮 5 脚本已完成 upload、reader sync、A 编辑、双 context trash/restore、permanent delete、API active/trash 空记录、IndexedDB identity/queue 清理和重复删除幂等请求验证；但最终脚本在 export 下载事件阶段因脚本导航状态不正确中断，未取得下载文件内容证据，因此报告不宣称完整链路全部通过。未触碰 `backend/data`，临时脚本已删除。
 
@@ -55,8 +52,8 @@
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
 - `git diff --check`：通过。
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
-- 本轮 commit：`6f7c288 Complete Task 11 identity cleanup`。
+- 本轮 commit：待提交；最终哈希以交付回复为准。
 
 ## 额外说明
 
-本报告随 Task 11 修复轮 3 一并提交。
+本报告记录当前最终统一修复波次；不删除历史后端接口、稿件数据或兼容代码。

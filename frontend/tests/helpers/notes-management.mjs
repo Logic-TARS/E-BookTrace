@@ -205,9 +205,9 @@ export async function installNotesApiRoutes(page, state = {}) {
           has_more: offset + items.length < matching.length,
           facets: state.facets || {
             books: state.notes.map(note => ({ id: note.book_id, title: note.book_title })),
-            tags: [...new Set(state.notes.flatMap(note => note.tags || []))],
-            note_kinds: [...new Set(state.notes.map(note => note.note ? 'reflected' : 'highlight'))],
-            colors: [...new Set(state.notes.map(note => note.color).filter(Boolean))],
+            tags: [...new Set(state.notes.flatMap(note => note.tags || []))].map(name => ({ name, count: state.notes.filter(note => (note.tags || []).includes(name)).length })),
+            note_kinds: [...new Set(state.notes.map(note => note.note ? 'reflected' : 'highlight'))].map(name => ({ name, count: state.notes.filter(note => (note.note ? 'reflected' : 'highlight') === name).length })),
+            colors: [...new Set(state.notes.map(note => note.color).filter(Boolean))].map(name => ({ name, count: state.notes.filter(note => note.color === name).length })),
           },
         },
       });

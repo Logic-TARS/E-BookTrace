@@ -158,7 +158,7 @@ test.describe('notes management shell', () => {
   test('facets populate filter controls and selection clears on filter change', async ({ page }) => {
     const state = {
       notes: [makeNote()],
-      facets: { books: [{ id: 'book-1', title: '测试书' }], tags: ['阅读'], note_kinds: ['reflected'], colors: ['yellow'] },
+      facets: { books: [{ id: 'book-1', title: '测试书', count: 1 }], tags: [{ name: '阅读', count: 1 }], note_kinds: [{ name: 'reflected', count: 1 }], colors: [{ name: 'yellow', count: 1 }] },
       requests: [],
     };
     await installNotesApiRoutes(page, state);
@@ -169,6 +169,61 @@ test.describe('notes management shell', () => {
     await page.locator('#notes-select-page').check();
     await page.getByLabel('高亮颜色').selectOption('yellow');
     await expect(page.locator('#notes-select-page')).not.toBeChecked();
+  });
+
+  test('book sorting sends backend book contract online and offline', async ({ page }) => {
+    const state = { notes: [makeNote({ book_title: '甲书' }), makeNote({ id: 'note-2', server_id: 'note-2', book_title: '乙书' })], requests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await page.getByLabel('排序').selectOption('book');
+    await expect.poll(() => state.requests.some(request => request.pathname === '/api/notes' && new URL('http://localhost' + request.search).searchParams.get('sort') === 'book')).toBe(true);
+    await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: false }));
+    await seedNotesIndexedDb(page, { highlights: state.notes });
+    await page.route('**/api/notes**', route => route.abort('failed'));
+    await page.reload();
+    await page.getByLabel('排序').selectOption('book');
+    await expect(page.locator('.note-management-card')).toHaveCount(2);
+  });
+
+  test('pink color filter is available online and offline', async ({ page }) => {
+    const state = { notes: [makeNote({ color: 'pink' })], requests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await expect(page.locator('#notes-color-filter option[value="pink"]')).toHaveCount(1);
+    await page.getByLabel('高亮颜色').selectOption('pink');
+    await expect.poll(() => state.requests.some(request => request.pathname === '/api/notes' && new URL('http://localhost' + request.search).searchParams.get('color') === 'pink')).toBe(true);
+    await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: false }));
+    await seedNotesIndexedDb(page, { highlights: [makeNote({ color: 'pink' })] });
+    await page.route('**/api/notes**', route => route.abort('failed'));
+    await page.reload();
+    await page.getByLabel('高亮颜色').selectOption('pink');
+    await expect(page.getByText('测试划线')).toBeVisible();
+  });
+
+  test('pending trash remains visible in trash and hidden from active; restore is hidden in trash', async ({ page }) => {
+    const note = makeNote({ server_id: 'server-trash', deleted_at: new Date().toISOString(), synced: false });
+    await installNotesApiRoutes(page, { notes: [note] });
+    await page.goto('/#/creation');
+    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await expect(page.getByText('测试划线')).toBeVisible();
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '恢复' }).click();
+    await page.getByRole('button', { name: '确认' }).click();
+    await expect(page.getByText('测试划线')).toHaveCount(0);
+  });
+
+  test('successful online batch updates IndexedDB for offline reads', async ({ page }) => {
+    const note = makeNote();
+    const state = { notes: [note], batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [note] });
+    await page.reload();
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '添加标签' }).click();
+    await page.getByLabel('批量标签').fill('离线验证');
+    await page.getByRole('button', { name: '确认添加' }).click();
+    await expect.poll(async () => (await readNotesIndexedDb(page))[0].tags).toContain('离线验证');
   });
 
   test('queued aliases override server identity without adding cached unrelated notes', async ({ page }) => {
@@ -687,8 +742,8 @@ test.describe('notes management shell', () => {
     await page.getByLabel('选择 测试划线').check();
     await page.getByRole('button', { name: '永久删除' }).click();
     await page.getByRole('button', { name: '确认永久删除' }).click();
-    expect(await readNotesIndexedDb(page)).toEqual([]);
-    expect(await readSyncQueue(page)).toEqual([]);
+    await expect.poll(() => readNotesIndexedDb(page)).toEqual([]);
+    await expect.poll(() => readSyncQueue(page)).toEqual([]);
   });
 
   test('stale failed refresh cannot replace newer offline fallback', async ({ page }) => {
