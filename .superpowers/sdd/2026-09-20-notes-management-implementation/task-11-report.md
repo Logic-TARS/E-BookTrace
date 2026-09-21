@@ -2,7 +2,7 @@
 
 ## 状态
 
-修复轮 3 已实现，待提交。本轮覆盖前端筛选协议、Markdown 文件名解析、EPUB 上传竞态，以及两项不稳定 Playwright 测试。
+修复轮 4 已实现并提交。本轮修复笔记列表异步刷新覆盖新状态的竞态，并在永久删除成功后同步清理本地 IndexedDB。真实隔离同源验收已执行，但未达到用户要求的完整闭环，故不宣称全部通过。
 
 ## 实现摘要
 
@@ -20,17 +20,18 @@
 通过：
 
 - `cd frontend && npm test`：65 passed，exit 0；notes route lifecycle 与 reader same-section 均通过。
+- `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed，存在既有 aiosqlite event-loop 关闭警告。
 - `cd frontend && npm test -- tests/notes-management.spec.js`：35 passed。
 - `cd frontend && npm test -- tests/server-sync.spec.js`：4 passed。
 - `cd frontend && npm test -- tests/mobile-layout.spec.js --project=mobile-chromium`：12 passed。
 - `cd frontend && npm test -- tests/import-ux.spec.js --grep "failed upload|slow server upload"`：2 passed。
 - `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed（存在既有 aiosqlite event-loop 关闭警告）。
 
-真实 FastAPI 隔离验收使用仓库根 `.venv`、临时 DB/BOOKS_DIR/Vault 与两个 browser contexts。已验证 upload、reader sync 创建划线、笔记编辑、A trash、B restore、A active、再次 trash，并确认服务端回收站状态。临时脚本在最终永久删除/导出阶段因页面导航竞态中断，故完整端到端链路不能宣称通过；未触碰 `backend/data`，临时脚本已删除。
+真实 FastAPI 隔离验收使用仓库根 `.venv`、临时 DB/BOOKS_DIR/Vault 与两个 browser contexts。已验证 upload、reader sync 创建划线、笔记编辑、A trash、B restore、A active、再次 trash、永久删除后的服务端 active/trash 为空；修复后本地 IndexedDB 删除逻辑也有 focused 覆盖。最终验收脚本在 UI 刷新后重新定位被删除笔记阶段中断，未完成真实下载文件内容、重复删除和完整 UI 消失闭环，因此本报告不宣称完整端到端链路通过。未触碰 `backend/data`，临时脚本已删除。
 
 ## 关注点
 
-- 真实同源验收尚未完成最后的永久删除后 Markdown 内容校验；其余跨设备状态步骤已实际走通。
+- 真实同源验收尚未完成最终 UI 消失、下载文件读取、重复删除幂等等闭环步骤；前端和后端自动化套件均通过。
 - 本次没有新增或提交敏感文件、EPUB、SQLite、`.env` 或测试产物。
 - 报告按要求保存在本文件。
 
@@ -50,7 +51,7 @@
 
 - `git diff --check`：通过。
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
-- 本轮 commit：`7ea0881 Fix Task 11 notes export and upload races`。
+- 本轮 commit：`8b6bf38 Harden notes refresh and permanent deletion`。
 
 ## 额外说明
 

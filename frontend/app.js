@@ -90,6 +90,7 @@
   let notesLoaded = false;
   let notesLoadError = null;
   let notesSearchTimer = null;
+  let notesLoadGeneration = 0;
   let notesFacets = null;
   const notesSelection = new Set();
   let managedNoteDraft = null;
@@ -4789,12 +4790,17 @@
         const affected = Number(result.affected || 0);
         const unchanged = Number(result.unchanged || 0);
         if (affected <= 0 || affected + unchanged < notes.length) throw new Error('Batch operation affected no notes');
+        if (type === 'delete') {
+          const deletedKeys = new Set(ids);
+          notesItems = notesItems.filter(item => !getNoteAliases(item).some(alias => deletedKeys.has(alias)));
+          await Promise.all(notes.map(note => dbDelete('highlights', note.id)));
+        }
         notes.forEach(note => {
-        if (type === 'trash') note.deleted_at = result.deleted_at || new Date().toISOString();
-        if (type === 'restore') note.deleted_at = null;
-        if (type === 'tags') note.tags = payload.action === 'add'
-          ? [...new Set([...(note.tags || []), ...payload.tags])]
-          : (note.tags || []).filter(tag => !payload.tags.includes(tag));
+          if (type === 'trash') note.deleted_at = result.deleted_at || new Date().toISOString();
+          if (type === 'restore') note.deleted_at = null;
+          if (type === 'tags') note.tags = payload.action === 'add'
+            ? [...new Set([...(note.tags || []), ...payload.tags])]
+            : (note.tags || []).filter(tag => !payload.tags.includes(tag));
           note.synced = true;
         });
       } catch (error) {
@@ -4867,9 +4873,13 @@
   }
 
   async function loadNotesManagement({ preserveDetail = false } = {}) {
+    const loadGeneration = ++notesLoadGeneration;
     const requestQuery = { ...notesQuery, q: String(notesQuery.q || '').trim(), tags: [...(notesQuery.tags || [])] };
+    const isCurrentLoad = () => loadGeneration === notesLoadGeneration;
     if (requestQuery.q.length === 1) {
-      notesItems = filterAndSortLocalNotes(await dbGetAllSafe('highlights'), requestQuery);
+      const localNotes = filterAndSortLocalNotes(await dbGetAllSafe('highlights'), requestQuery);
+      if (!isCurrentLoad()) return;
+      notesItems = localNotes;
       notesTotal = notesItems.length;
       if (dom.notesDataStatus) dom.notesDataStatus.textContent = '至少输入 2 个字符';
       notesHasMore = false;
@@ -4878,12 +4888,15 @@
     }
     try {
       if (requestQuery.dataScope === 'pending') {
-        notesItems = await loadPendingNotes(requestQuery);
+        const pendingItems = await loadPendingNotes(requestQuery);
+        if (!isCurrentLoad()) return;
+        notesItems = pendingItems;
         notesTotal = notesItems.length;
         notesHasMore = false;
       } else {
         const result = await fetchServerNotes(requestQuery);
         const [local, queued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
+        if (!isCurrentLoad()) return;
         notesItems = mergeServerAndLocalNotes(result.items || [], local, queued, requestQuery);
         notesTotal = Number(result.total || 0);
         notesHasMore = Boolean(result.has_more);
@@ -4894,6 +4907,7 @@
       }
       notesLoaded = true;
     } catch (error) {
+      if (!isCurrentLoad()) return;
       notesLoadError = error;
       if (!notesLoaded) {
         const fallback = await loadOfflineNotes(requestQuery);

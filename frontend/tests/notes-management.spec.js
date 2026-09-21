@@ -654,19 +654,21 @@ test.describe('notes management shell', () => {
     await expect(page.getByText('永久删除 1 条笔记')).toBeVisible();
     await page.getByRole('button', { name: '确认永久删除' }).click();
     expect(state.batchRequests.at(-1).type).toBe('delete');
+    await expect(page.getByText('测试划线')).toHaveCount(0);
+    expect(await readNotesIndexedDb(page)).toEqual([]);
   });
 
-  test('failed batch refreshes server state and preserves selection for retry', async ({ page }) => {
+  test('stale refresh cannot replace a newer notes list or selection', async ({ page }) => {
     const note = makeNote();
-    const state = { notes: [note], failBatchType: 'trash', batchRequests: [] };
+    const state = { notes: [note], notesGetDelays: { active: [], trash: [250, 0] }, batchRequests: [] };
     await installNotesApiRoutes(page, state);
     await page.goto('/#/creation');
-    await page.getByLabel('选择 测试划线').check();
-    await page.getByRole('button', { name: '移入回收站' }).click();
-    await page.getByRole('button', { name: '确认移入' }).click();
-    await expect(page.getByText('批量操作失败，请重试')).toBeVisible();
-    await expect(page.getByText('已选择 1 条')).toBeVisible();
-    expect(state.notes[0].deleted_at).toBeNull();
+    await expect(page.getByText('测试划线')).toBeVisible();
+    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await expect(page.getByText('还没有可显示的笔记')).toBeVisible();
+    await page.waitForTimeout(300);
+    await expect(page.getByText('测试划线')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '永久删除' })).toBeDisabled();
   });
 
   test('legacy offline note is not changed before book validation', async ({ page }) => {

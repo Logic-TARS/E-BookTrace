@@ -180,6 +180,8 @@ export async function installNotesApiRoutes(page, state = {}) {
 
     if (url.pathname === '/api/notes' && method === 'GET') {
       const view = url.searchParams.get('view') || 'active';
+      const delay = state.notesGetDelays?.[view]?.shift?.() || 0;
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       const offset = Number(url.searchParams.get('offset') || 0);
       const limit = Number(url.searchParams.get('limit') || 50);
       const q = (url.searchParams.get('q') || '').toLowerCase();
