@@ -1708,6 +1708,16 @@ body.reader-chrome-hidden .app-nav {
   padding: 0 40px 40px;
 }
 
+.notes-management-layout,
+.notes-list-pane,
+.notes-detail-pane {
+  min-width: 0;
+}
+
+.notes-detail-pane {
+  overflow-wrap: anywhere;
+}
+
 .notes-list-pane,
 .notes-detail-pane {
   min-width: 0;
@@ -2510,6 +2520,28 @@ body.reader-chrome-hidden .reader-chrome-reveal {
 
   .notes-detail-pane {
     display: none;
+  }
+
+  .notes-detail-pane.is-open {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    width: 100vw;
+    height: 100dvh;
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    overflow: auto;
+    background: var(--paper);
+  }
+
+  .notes-detail-pane.is-open .notes-detail-heading {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-bottom: 8px;
+    background: var(--paper);
   }
 
   input,

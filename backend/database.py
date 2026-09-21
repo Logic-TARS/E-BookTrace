@@ -1208,6 +1208,7 @@ async def export_all_to_json() -> Path:
             "updated_at": h.get("updated_at", ""),
             "status": h.get("status", "raw"),
         })
+    NOTES_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
     NOTES_JSON_PATH.write_text(
         json.dumps(entries, ensure_ascii=False, indent=2),
         encoding="utf-8",

@@ -25,6 +25,46 @@ test.describe('notes management shell', () => {
     await expect(page.locator('#draft-editor, #draft-list, #btn-generate-video, #btn-generate-article')).toHaveCount(0);
   });
 
+  test('online Markdown export downloads the server response', async ({ page }) => {
+    await installNotesApiRoutes(page, {
+      notes: [makeNote()],
+      markdown: '# Marginalia 笔记\\n\\n## 《测试书》\\n',
+    });
+    await page.goto('/#/creation');
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出 Markdown' }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^Marginalia-笔记-[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$/);
+  });
+
+  test('offline Markdown marks the export as incomplete', async ({ page }) => {
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [makeNote()] });
+    await page.route('**/api/notes**', route => route.abort('failed'));
+    await page.reload();
+    await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: false }));
+
+    const contentPromise = page.evaluate(() => {
+      const original = URL.createObjectURL;
+      return new Promise(resolve => {
+        URL.createObjectURL = blob => {
+          blob.text().then(resolve);
+          return original(blob);
+        };
+      });
+    });
+    await page.getByRole('button', { name: '导出 Markdown' }).click();
+    expect(await contentPromise).toContain('离线导出，可能不完整');
+  });
+
+  test('pending view disables Markdown export', async ({ page }) => {
+    await installNotesApiRoutes(page, { notes: [] });
+    await page.goto('/#/creation');
+    await page.getByLabel('数据范围').selectOption('pending');
+    await expect(page.getByRole('button', { name: '导出 Markdown' })).toBeDisabled();
+  });
+
   test('online notes query sends filters after debounce', async ({ page }) => {
     const state = { notes: [makeNote()], requests: [] };
     await installNotesApiRoutes(page, state);

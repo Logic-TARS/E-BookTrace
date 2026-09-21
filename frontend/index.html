@@ -7,7 +7,7 @@
   <meta name="description" content="Marginalia - 阅读划线、读书感悟与笔记管理">
   <link rel="manifest" href="manifest.json">
   <title>Marginalia</title>
-  <link rel="stylesheet" href="style.css?v=24">
+  <link rel="stylesheet" href="style.css?v=25">
   <script src="jszip.min.js"></script>
   <script src="epub.min.js"></script>
 </head>
@@ -221,7 +221,8 @@
         </div>
         <div class="creation-actions notes-management-actions">
           <span class="notes-data-status" id="notes-data-status">尚未加载笔记</span>
-          <button class="btn btn-primary" id="btn-export-notes-markdown" type="button">导出 Markdown</button>
+          <button class="btn btn-primary" id="btn-export-notes-markdown" type="button" aria-describedby="notes-export-help">导出 Markdown</button>
+          <span class="visually-hidden" id="notes-export-help">在线导出完整筛选结果；离线导出可能不完整。待同步和回收站视图不可导出。</span>
           <button class="btn btn-secondary" id="btn-toggle-notes-trash" type="button" aria-pressed="false">回收站</button>
         </div>
       </header>
@@ -381,6 +382,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=25"></script>
 </body>
 </html>

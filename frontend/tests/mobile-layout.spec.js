@@ -1,7 +1,11 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { INDEXED_DB_VERSION } from './helpers/notes-management.mjs';
+import {
+  INDEXED_DB_VERSION,
+  installNotesApiRoutes,
+  makeNote,
+} from './helpers/notes-management.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(__dirname, 'fixtures', 'multichapter.epub');
@@ -268,6 +272,24 @@ test.describe('@mobile mobile layout', () => {
       await page.waitForTimeout(50);
       await expectNoHorizontalOverflow(page);
     }
+  });
+
+  test('opens note detail as a mobile full-screen layer and traps dirty navigation', async ({ page }) => {
+    await installNotesApiRoutes(page, { notes: [makeNote({ highlight_text: '移动测试划线' })] });
+    await page.goto('/index.html');
+    await page.locator('#btn-nav-create').click();
+    await expect(page.locator('#creation-view')).toHaveClass(/active/);
+    await expect(page.getByText('移动测试划线')).toBeVisible();
+    await page.getByText('移动测试划线').click();
+    await expect(page.locator('#notes-detail-pane')).toBeVisible();
+    const detail = await page.locator('#notes-detail-pane').evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return { width: rect.width, height: rect.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
+    });
+    expect(detail.width).toBeGreaterThanOrEqual(detail.viewportWidth - 2);
+    expect(detail.height).toBeGreaterThanOrEqual(detail.viewportHeight - 2);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#notes-detail-pane')).toBeHidden();
   });
 
   test('keeps the app shell and workspace inside the safe viewport', async ({ page }) => {

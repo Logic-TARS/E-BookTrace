@@ -215,6 +215,7 @@
     btnBatchDelete: $('#btn-batch-delete'),
     btnEmptyTrash: $('#btn-empty-trash'),
     btnNotesTrash: $('#btn-toggle-notes-trash'),
+    btnExportNotesMarkdown: $('#btn-export-notes-markdown'),
     btnClearNoteFilters: $('#btn-clear-note-filters'),
     bookDeleteModal: $('#book-delete-modal'),
     bookDeleteMessage: $('#book-delete-message'),
@@ -4568,6 +4569,7 @@
   function renderManagedNoteDetail() {
     const note = managedNoteDraft;
     if (!note || !dom.notesDetailPane) return;
+    dom.notesDetailPane.classList.add('is-open');
     dom.notesDetailPane.innerHTML = `
       <div class="notes-detail-content">
         <div class="notes-detail-heading"><h2>笔记详情</h2><button class="btn btn-ghost btn-sm" id="btn-close-managed-note" type="button">关闭</button></div>
@@ -4595,7 +4597,10 @@
   function closeManagedNote() {
     managedNoteDraft = null;
     managedNoteOriginal = null;
-    if (dom.notesDetailPane) dom.notesDetailPane.innerHTML = '<div class="empty-state"><p>选择一条笔记查看详情</p></div>';
+    if (dom.notesDetailPane) {
+      dom.notesDetailPane.classList.remove('is-open');
+      dom.notesDetailPane.innerHTML = '<div class="empty-state"><p>选择一条笔记查看详情</p></div>';
+    }
   }
 
   async function openManagedNote(note) {
@@ -4907,11 +4912,60 @@
 
   function updateNotesQuery(changes) {
     notesQuery = { ...notesQuery, ...changes, offset: 0 };
+    if (dom.btnExportNotesMarkdown) {
+      const disabled = notesQuery.view === 'trash' || notesQuery.dataScope === 'pending';
+      dom.btnExportNotesMarkdown.disabled = disabled;
+      dom.btnExportNotesMarkdown.title = disabled ? '待同步和回收站视图不可导出' : '';
+    }
     notesSelection.clear();
     if (dom.notesSelectPage) dom.notesSelectPage.checked = false;
     const oneCharacter = String(notesQuery.q || '').trim().length === 1;
     if (oneCharacter && dom.notesDataStatus) dom.notesDataStatus.textContent = '至少输入 2 个字符';
     scheduleNotesManagementLoad();
+  }
+
+  function renderOfflineNotesMarkdown(items) {
+    const lines = ['# Marginalia 笔记', '', '> 离线导出，可能不完整。', ''];
+    items.forEach(note => {
+      lines.push(`## 《${note.book_title || '未命名书籍'}》`);
+      if (note.chapter) lines.push(`### ${note.chapter}`);
+      lines.push(`- 划线：${note.highlight_text || ''}`);
+      if (note.note) lines.push(`- 感悟：${note.note}`);
+      if (note.tags?.length) lines.push(`- 标签：${note.tags.join('、')}`);
+      lines.push('');
+    });
+    return lines.join('\\n');
+  }
+
+  function startMarkdownDownload(content, filename) {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  async function exportNotesMarkdown() {
+    if (!dom.btnExportNotesMarkdown || dom.btnExportNotesMarkdown.disabled) return;
+    if (notesQuery.view === 'trash' || notesQuery.dataScope === 'pending') return;
+    const filename = `Marginalia-笔记-${new Date().toISOString().slice(0, 10)}.md`;
+    try {
+      if (!navigator.onLine) {
+        const result = await loadOfflineNotes(notesQuery);
+        startMarkdownDownload(renderOfflineNotesMarkdown(result.items), filename);
+        return;
+      }
+      const response = await fetchWithTimeout(API_BASE + '/api/notes/export.md?' + buildNotesQueryParams(notesQuery, { includePaging: false }));
+      if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+      const content = await response.text();
+      const disposition = response.headers.get('content-disposition') || '';
+      const serverFilename = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+      startMarkdownDownload(content, filename || serverFilename);
+    } catch (error) {
+      showToast('Markdown 导出失败，请重试', 'error');
+    }
   }
 
   // ==================== SYNC ====================
@@ -5126,7 +5180,7 @@
       });
     });
 
-    navigator.serviceWorker.register('sw.js')
+    navigator.serviceWorker.register('sw.js?v=25')
       .then((reg) => {
         console.log('Service Worker registered:', reg.scope);
         reg.update().catch(() => {});
@@ -5215,11 +5269,18 @@
         }
       }
     });
+    dom.btnExportNotesMarkdown?.addEventListener('click', exportNotesMarkdown);
+    if (dom.btnExportNotesMarkdown) dom.btnExportNotesMarkdown.disabled = false;
     dom.btnNotesTrash?.addEventListener('click', () => requestNotesNavigation(() => updateNotesQuery({ view: notesQuery.view === 'trash' ? 'active' : 'trash' })));
     dom.btnNotesTrash?.addEventListener('click', () => { if (dom.btnNotesTrash) dom.btnNotesTrash.setAttribute('aria-pressed', String(notesQuery.view === 'trash')); });
     dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });
     dom.notesPrevious?.addEventListener('click', () => { notesQuery.offset = Math.max(0, notesQuery.offset - notesQuery.limit); loadNotesManagement(); });
     dom.notesNext?.addEventListener('click', () => { notesQuery.offset += notesQuery.limit; loadNotesManagement(); });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !managedNoteDraft) return;
+      event.preventDefault();
+      requestNotesNavigation(() => closeManagedNote());
+    });
     window.addEventListener('hashchange', () => requestNotesNavigation(applyCurrentRoute));
     window.addEventListener('popstate', () => requestNotesNavigation(applyCurrentRoute));
     window.addEventListener('beforeunload', (event) => {

@@ -1,5 +1,5 @@
 from datetime import date
-from typing import Any
+from typing import Any, Optional
 
 
 def normalize_note_tags(tags: list[str]) -> list[str]:
@@ -85,6 +85,6 @@ def render_notes_markdown(
     return "\n\n".join(sections) + "\n"
 
 
-def notes_markdown_filename(today: date | None = None) -> str:
+def notes_markdown_filename(today: Optional[date] = None) -> str:
     export_date = today or date.today()
     return f"Marginalia-笔记-{export_date.isoformat()}.md"

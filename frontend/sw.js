@@ -2,13 +2,14 @@
  * Marginalia Service Worker
  * Cache-first for app shell, network-first for API calls
  */
-const CACHE_NAME = 'marginalia-v24';
+const APP_SHELL_CACHE_NAME = 'marginalia-shell-v25';
+const EPUB_CACHE_NAME = 'marginalia-epubs-v1';
 
 const APP_SHELL = [
   '.',
   'index.html',
-  'app.js?v=24',
-  'style.css?v=24',
+  'app.js?v=25',
+  'style.css?v=25',
   'manifest.json',
   'jszip.min.js',
   'epub.min.js',
@@ -17,7 +18,7 @@ const APP_SHELL = [
 // Install: cache app shell
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(APP_SHELL_CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
       .then(() => self.skipWaiting())
   );
 });
@@ -27,20 +28,21 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        keys.filter((key) => key !== APP_SHELL_CACHE_NAME && key !== EPUB_CACHE_NAME && !key.startsWith('marginalia-epubs-'))
+        .map((key) => caches.delete(key))
       )
     ).then(() => self.clients.claim())
   );
 });
 
-function cacheFirst(request) {
+function cacheFirst(request, cacheName = APP_SHELL_CACHE_NAME) {
   return caches.match(request).then((cached) => {
     if (cached) return cached;
 
     return fetch(request).then((response) => {
       if (request.method === 'GET' && response.status === 200) {
         const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => {
+        caches.open(cacheName).then((cache) => {
           cache.put(request, clone);
         });
       }
@@ -53,7 +55,7 @@ function networkFirst(request) {
   return fetch(request).then((response) => {
     if (request.method === 'GET' && response.status === 200) {
       const clone = response.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+      caches.open(APP_SHELL_CACHE_NAME).then((cache) => cache.put(request, clone));
     }
     return response;
   }).catch(() => caches.match(request));
@@ -69,7 +71,7 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/api/books/') &&
     (url.pathname.endsWith('/file') || url.pathname.toLowerCase().endsWith('.epub'))
   ) {
-    event.respondWith(cacheFirst(event.request));
+    event.respondWith(cacheFirst(event.request, EPUB_CACHE_NAME));
     return;
   }
 
@@ -104,7 +106,7 @@ self.addEventListener('fetch', (event) => {
 
   // Vendored libraries and other static assets remain cache-first.
   event.respondWith(
-    cacheFirst(event.request).catch(() => {
+    cacheFirst(event.request, APP_SHELL_CACHE_NAME).catch(() => {
         // Offline fallback for navigation
         if (event.request.mode === 'navigate') {
           return caches.match('index.html');
