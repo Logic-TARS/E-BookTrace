@@ -4612,7 +4612,7 @@
     }
   }
 
-  function requestNotesNavigation(action, requestedHash = window.location.hash) {
+  function requestNotesNavigation(action) {
     if (!isManagedNoteDraftDirty()) return Promise.resolve(action());
     const currentHash = `#${currentRoute || '/creation'}`;
     dom.notesUnsavedDialog.hidden = false;
@@ -4645,7 +4645,19 @@
     showToast('感悟已删除', 'success');
     const toastButton = document.createElement('button');
     toastButton.type = 'button'; toastButton.textContent = '撤销'; toastButton.className = 'btn btn-ghost btn-sm';
-    toastButton.onclick = async () => { if (managedNoteUndo) { managedNoteDraft = createManagedNoteDraft(managedNoteUndo); await saveManagedNoteDraft(); managedNoteUndo = null; } };
+    toastButton.onclick = async () => {
+      if (!managedNoteUndo) return;
+      managedNoteDraft = createManagedNoteDraft(managedNoteUndo);
+      const restored = await saveManagedNoteDraft();
+      if (restored) {
+        managedNoteUndo = null;
+        showToast('感悟已恢复', 'success');
+      } else {
+        showToast('撤销失败，请重试', 'error');
+        dom.toast.appendChild(toastButton);
+        dom.toast.hidden = false;
+      }
+    };
     dom.toast.appendChild(toastButton);
     if (managedNoteUndoTimer) clearTimeout(managedNoteUndoTimer);
     managedNoteUndoTimer = setTimeout(() => { managedNoteUndo = null; }, 5000);
@@ -5002,8 +5014,8 @@
     dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });
     dom.notesPrevious?.addEventListener('click', () => { notesQuery.offset = Math.max(0, notesQuery.offset - notesQuery.limit); loadNotesManagement(); });
     dom.notesNext?.addEventListener('click', () => { notesQuery.offset += notesQuery.limit; loadNotesManagement(); });
-    window.addEventListener('hashchange', () => requestNotesNavigation(applyCurrentRoute, window.location.hash));
-    window.addEventListener('popstate', () => requestNotesNavigation(applyCurrentRoute, window.location.hash));
+    window.addEventListener('hashchange', () => requestNotesNavigation(applyCurrentRoute));
+    window.addEventListener('popstate', () => requestNotesNavigation(applyCurrentRoute));
     window.addEventListener('beforeunload', (event) => {
       if (isManagedNoteDraftDirty()) { event.preventDefault(); event.returnValue = ''; }
     });
@@ -5016,7 +5028,7 @@
     });
 
     // Back to library
-    dom.btnBack.addEventListener('click', showLibrary);
+    dom.btnBack.addEventListener('click', () => requestNotesNavigation(showLibrary));
 
     // AI book Q&A
     dom.btnReaderTools.addEventListener('click', toggleReaderTools);

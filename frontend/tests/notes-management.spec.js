@@ -464,6 +464,49 @@ test.describe('notes management shell', () => {
     await expect(page.getByRole('textbox', { name: '感悟' })).toHaveValue('原感悟');
   });
 
+  test('undoing reflection deletion keeps retry state when restore fails', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__failHighlightPut = false;
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value, ...args) {
+        if (this.name === 'highlights' && window.__failHighlightPut) {
+          window.__failHighlightPut = false;
+          throw new DOMException('forced undo write failure', 'UnknownError');
+        }
+        return put.call(this, value, ...args);
+      };
+    });
+    const note = makeNote({ note: '原感悟' });
+    await installNotesApiRoutes(page, { notes: [note] });
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [note] });
+    await page.reload();
+    await page.getByText('测试划线').click();
+    await page.getByRole('button', { name: '删除感悟' }).click();
+    await page.evaluate(() => { window.__failHighlightPut = true; });
+    await page.getByRole('button', { name: '撤销' }).click();
+
+    await expect(page.getByText('撤销失败')).toBeVisible();
+    await expect(page.getByRole('button', { name: '撤销' })).toHaveCount(1);
+    await expect(page.getByRole('textbox', { name: '感悟' })).toHaveValue('');
+
+    await page.getByRole('button', { name: '撤销' }).click();
+    await expect(page.getByRole('textbox', { name: '感悟' })).toHaveValue('原感悟');
+  });
+
+  test('reader back button is routed through notes draft protection', async ({ page }) => {
+    await installNotesApiRoutes(page, { notes: [makeNote()] });
+    await page.goto('/#/creation');
+    await page.getByText('测试划线').click();
+    await page.getByRole('textbox', { name: '感悟' }).fill('尚未保存');
+    await page.evaluate(() => {
+      document.querySelector('#btn-back').click();
+    });
+    await expect(page.getByRole('dialog', { name: '未保存的修改' })).toBeVisible();
+    await page.getByRole('button', { name: '取消' }).click();
+    await expect(page).toHaveURL(/#\/creation$/);
+  });
+
   test('deleting reflection keeps highlight and can be undone', async ({ page }) => {
     const note = makeNote({ note: '原感悟' });
     await installNotesApiRoutes(page, { notes: [note] });
