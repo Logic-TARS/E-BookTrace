@@ -16,7 +16,26 @@ from config import settings
 from notes import normalize_note_tags
 
 # Ensure data directory exists
-DB_PATH = Path(__file__).parent / "data" / "marginalia.db"
+SQLITE_URL_PREFIX = "sqlite+aiosqlite:///"
+DEFAULT_DB_PATH = Path(__file__).parent / "data" / "marginalia.db"
+
+
+def _resolve_db_path() -> Path:
+    """Read the database location from DATABASE_URL.
+
+    aiosqlite wants a plain filesystem path, so strip the SQLAlchemy-style
+    prefix. Unset or unrecognised values fall back to the original location,
+    which keeps existing deployments pointing at the same file.
+    """
+    url = (settings.database_url or "").strip()
+    if url.startswith(SQLITE_URL_PREFIX):
+        candidate = url[len(SQLITE_URL_PREFIX):]
+        if candidate:
+            return Path(candidate)
+    return DEFAULT_DB_PATH
+
+
+DB_PATH = _resolve_db_path()
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 LEGACY_EXTERNAL_SYNC_COLUMN = "synced_to_" + "fei" + "shu"
 
