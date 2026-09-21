@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#2f3a32">
-  <meta name="description" content="Marginalia - 阅读划线、读书感悟、内容创作与 Obsidian 导出">
+  <meta name="description" content="Marginalia - 阅读划线、读书感悟与笔记管理">
   <link rel="manifest" href="manifest.json">
   <title>Marginalia</title>
   <link rel="stylesheet" href="style.css?v=24">
@@ -18,7 +18,7 @@
         <span class="brand-mark">M</span>
         <div class="brand-copy">
           <strong>Marginalia</strong>
-          <span>从阅读到成稿</span>
+          <span>从阅读到沉淀</span>
         </div>
       </div>
       <div class="nav-tabs">
@@ -29,7 +29,7 @@
           <span class="nav-tab-icon" aria-hidden="true">◇</span><span>阅读</span>
         </button>
         <button class="nav-tab" id="btn-nav-create" type="button">
-          <span class="nav-tab-icon" aria-hidden="true">✎</span><span>创作</span>
+          <span class="nav-tab-icon" aria-hidden="true">✎</span><span>笔记管理</span>
         </button>
       </div>
     </nav>
@@ -52,14 +52,14 @@
         <div class="page-heading">
           <span class="eyebrow">Library</span>
           <h1 class="app-title">你的阅读素材库</h1>
-          <p class="app-subtitle">导入 EPUB，阅读时划线，沉淀感悟，再把素材送进创作工作台。</p>
+          <p class="app-subtitle">导入 EPUB，阅读时划线，沉淀感悟，再到笔记管理集中整理。</p>
         </div>
         <div class="library-actions">
           <label class="btn btn-primary import-btn">
             导入 EPUB
             <input type="file" id="file-input" accept=".epub" hidden>
           </label>
-          <button class="btn btn-secondary" id="btn-library-create" type="button">进入创作</button>
+          <button class="btn btn-secondary" id="btn-library-create" type="button">笔记管理</button>
         </div>
       </header>
 
@@ -167,7 +167,7 @@
           <div class="notes-panel-header">
             <div>
               <h3>划线与感悟</h3>
-              <p>单击跳回原文，双击编辑感悟。</p>
+              <p>展开后可定位原文或编辑感悟。</p>
             </div>
             <div class="notes-panel-actions">
               <span class="notes-count" id="notes-count">0 条</span>
@@ -212,85 +212,120 @@
     </div>
 
     <div id="creation-view" class="view">
-      <header class="creation-header">
+      <header class="creation-header notes-management-header notes-shell-section">
+        <button class="btn btn-ghost" id="btn-notes-back" type="button">返回主界面</button>
         <div class="page-heading">
-          <span class="eyebrow">Studio</span>
-          <h1>创作工作台</h1>
-          <p>挑选划线素材，补充个人感悟，再生成可继续修改的内容草稿。</p>
+          <span class="eyebrow">Notes</span>
+          <h1>笔记管理</h1>
+          <p>集中整理划线、感悟与同步状态。</p>
         </div>
-        <div class="creation-actions">
-          <button class="btn btn-primary" id="btn-refresh-materials" type="button">刷新素材</button>
-          <button class="btn btn-secondary" id="btn-export-book" type="button">导出书籍到 Obsidian</button>
+        <div class="creation-actions notes-management-actions">
+          <span class="notes-data-status" id="notes-data-status">尚未加载笔记</span>
+          <button class="btn btn-primary" id="btn-export-notes-markdown" type="button">导出 Markdown</button>
+          <button class="btn btn-secondary" id="btn-toggle-notes-trash" type="button" aria-pressed="false">回收站</button>
         </div>
       </header>
 
-      <div class="creation-steps" aria-label="创作步骤">
-        <span class="creation-step is-active">摘录</span>
-        <span class="creation-step">判断</span>
-        <span class="creation-step">成稿</span>
-        <span class="creation-step">入库</span>
-      </div>
+      <section class="notes-filter-row notes-shell-section" aria-label="筛选笔记">
+        <label class="notes-search-field">
+          <span>搜索</span>
+          <input id="notes-search" type="search" placeholder="搜索划线或感悟">
+        </label>
+        <label>
+          <span>书籍</span>
+          <select id="notes-book-filter"><option value="">全部书籍</option></select>
+        </label>
+        <label>
+          <span>标签</span>
+          <select id="notes-tag-filter"><option value="">全部标签</option></select>
+        </label>
+        <label>
+          <span>内容类型</span>
+          <select id="notes-kind-filter">
+            <option value="">全部类型</option>
+            <option value="highlight">仅划线</option>
+            <option value="reflection">有感悟</option>
+          </select>
+        </label>
+        <label>
+          <span>颜色</span>
+          <select id="notes-color-filter"><option value="">全部颜色</option></select>
+        </label>
+        <label>
+          <span>排序</span>
+          <select id="notes-sort">
+            <option value="updated_desc">最近更新</option>
+            <option value="created_desc">最近创建</option>
+            <option value="book_progress">书籍进度</option>
+          </select>
+        </label>
+        <label class="notes-pending-filter">
+          <input id="notes-pending-only" type="checkbox">
+          <span>待同步视图</span>
+        </label>
+        <button class="btn btn-ghost" id="btn-clear-note-filters" type="button">清空筛选</button>
+      </section>
 
-      <div class="creation-layout">
-        <aside class="materials-pane workspace-pane">
-          <div class="pane-heading">
-            <div>
-              <span class="eyebrow">Materials</span>
-              <h2>素材库</h2>
-              <p>从阅读划线中选择本次要展开的观点。</p>
+      <section class="notes-batch-bar notes-shell-section" aria-label="批量操作">
+        <label><input id="notes-select-page" type="checkbox"> 当前页全选</label>
+        <strong id="notes-selection-count">已选择 0 条</strong>
+        <button class="btn btn-secondary btn-sm" id="btn-batch-add-tag" type="button" disabled>添加标签</button>
+        <button class="btn btn-secondary btn-sm" id="btn-batch-remove-tag" type="button" disabled>移除标签</button>
+        <button class="btn btn-danger btn-sm" id="btn-batch-trash" type="button" disabled>移入回收站</button>
+      </section>
+
+      <section class="notes-trash-actions notes-shell-section" id="notes-trash-actions" aria-label="回收站操作" hidden>
+        <button class="btn btn-secondary" id="btn-batch-restore" type="button" disabled>恢复</button>
+        <button class="btn btn-danger" id="btn-batch-delete" type="button" disabled>永久删除</button>
+        <button class="btn btn-danger" id="btn-empty-trash" type="button">清空回收站</button>
+      </section>
+
+      <main class="notes-management-layout notes-shell-section">
+        <section class="notes-list-pane" aria-label="笔记列表">
+          <div class="notes-management-list" id="notes-management-list">
+            <div class="empty-state notes-empty-state">
+              <p>还没有可显示的笔记</p>
+              <p class="empty-hint">数据加载将在下一阶段接入。</p>
             </div>
           </div>
-          <div class="pane-toolbar">
-            <input type="search" id="material-book-filter" placeholder="按书名筛选">
-            <input type="search" id="material-tag-filter" placeholder="按标签筛选">
+          <nav class="notes-pagination" aria-label="笔记分页">
+            <button class="btn btn-ghost btn-sm" id="btn-notes-previous" type="button" disabled>上一页</button>
+            <span id="notes-page-status">第 1 页</span>
+            <button class="btn btn-ghost btn-sm" id="btn-notes-next" type="button" disabled>下一页</button>
+          </nav>
+        </section>
+        <aside class="notes-detail-pane" id="notes-detail-pane" aria-label="笔记详情">
+          <div class="empty-state">
+            <p>选择一条笔记查看详情</p>
+            <p class="empty-hint">本任务仅提供详情区域骨架。</p>
           </div>
-          <div class="materials-list" id="materials-list"></div>
         </aside>
+      </main>
 
-        <section class="reflection-pane workspace-pane paper-pane">
-          <div class="pane-heading">
-            <div>
-              <span class="eyebrow">Reflection</span>
-              <h2>感悟编辑</h2>
-              <p>把摘录变成自己的判断、故事或选题角度。</p>
-            </div>
-            <span id="selected-material-count">0 条已选</span>
+      <div id="notes-unsaved-dialog" class="modal-overlay" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="notes-unsaved-title">
+          <div class="modal-header"><h3 id="notes-unsaved-title">有未保存的修改</h3></div>
+          <div class="modal-body"><p>离开前要如何处理当前修改？</p></div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" type="button">取消</button>
+            <button class="btn btn-secondary" type="button">放弃修改</button>
+            <button class="btn btn-primary" type="button">保存并继续</button>
           </div>
-          <div id="selected-material-detail" class="selected-material-detail">
-            <p class="empty-hint">从左侧选择一条素材后编辑感悟；勾选多条素材后生成稿件。</p>
-          </div>
-          <textarea id="reflection-editor" placeholder="写下你的理解、反驳、生活案例，或适合展开成内容的角度。" aria-label="感悟编辑"></textarea>
-          <div class="reflection-actions">
-            <button class="btn btn-danger" id="btn-delete-reflection" disabled type="button">删除感悟</button>
-            <button class="btn btn-primary" id="btn-save-reflection" disabled type="button">保存感悟</button>
-          </div>
-        </section>
-
-        <section class="draft-pane workspace-pane editor-pane">
-          <div class="pane-heading">
-            <div>
-              <span class="eyebrow">Drafts</span>
-              <h2>稿件生成</h2>
-              <p>基于勾选素材生成草稿，保留人工修改空间。</p>
-            </div>
-          </div>
-          <input type="text" id="draft-topic" placeholder="选题主题，可留空" aria-label="选题主题">
-          <textarea id="draft-instruction" placeholder="额外要求，例如：更口语化、加入个人经历、控制在 90 秒。" aria-label="稿件额外要求"></textarea>
-          <div class="draft-actions">
-            <button class="btn btn-primary" id="btn-generate-video" type="button">生成视频号稿</button>
-            <button class="btn btn-primary" id="btn-generate-article" type="button">生成公众号稿</button>
-          </div>
-          <div class="draft-list" id="draft-list"></div>
-          <div class="draft-editor" id="draft-editor" hidden>
-            <input type="text" id="draft-title-editor" placeholder="稿件标题" aria-label="稿件标题">
-            <textarea id="draft-content-editor" placeholder="稿件正文" aria-label="稿件正文"></textarea>
-            <div class="draft-actions">
-              <button class="btn btn-primary" id="btn-save-draft" type="button">保存草稿</button>
-              <button class="btn btn-secondary" id="btn-export-draft" type="button">导出草稿到 Obsidian</button>
-            </div>
-          </div>
-        </section>
+        </div>
       </div>
+
+      <div id="notes-count-confirm-dialog" class="modal-overlay" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="notes-count-confirm-title">
+          <div class="modal-header"><h3 id="notes-count-confirm-title">确认批量操作</h3></div>
+          <div class="modal-body"><p id="notes-count-confirm-message">将处理 0 条笔记。</p></div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" type="button">取消</button>
+            <button class="btn btn-danger" type="button">确认</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="visually-hidden" id="notes-live-status" role="status" aria-live="polite">笔记管理页面已打开</p>
     </div>
 
     <div id="selection-toolbar" class="selection-toolbar" hidden>

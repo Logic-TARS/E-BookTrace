@@ -7,7 +7,7 @@
 
   // ==================== CONSTANTS ====================
   const DB_NAME = 'marginalia';
-  const DB_VERSION = 5;
+  const DB_VERSION = 6;
   const API_BASE = '';  // same origin — works locally and remotely
   const API_TIMEOUT_MS = 5000;
   const READER_SYNC_TIMEOUT_MS = 3000;
@@ -38,9 +38,6 @@
   let currentChapter = '';
   let currentCfi = '';
   let pendingSelection = null;  // { cfiRange, text } from last selection
-  let selectedMaterialId = null;
-  let selectedMaterialIds = new Set();
-  let currentDraftId = null;
   let locationsReadyPromise = null;
   let locationsReadyBook = null;
   let lastPageInfo = null;
@@ -170,26 +167,7 @@
     btnNavCreate: $('#btn-nav-create'),
     btnLibraryCreate: $('#btn-library-create'),
     creationView: $('#creation-view'),
-    btnRefreshMaterials: $('#btn-refresh-materials'),
-    btnExportBook: $('#btn-export-book'),
-    materialBookFilter: $('#material-book-filter'),
-    materialTagFilter: $('#material-tag-filter'),
-    materialsList: $('#materials-list'),
-    selectedMaterialCount: $('#selected-material-count'),
-    selectedMaterialDetail: $('#selected-material-detail'),
-    reflectionEditor: $('#reflection-editor'),
-    btnSaveReflection: $('#btn-save-reflection'),
-    btnDeleteReflection: $('#btn-delete-reflection'),
-    draftTopic: $('#draft-topic'),
-    draftInstruction: $('#draft-instruction'),
-    btnGenerateVideo: $('#btn-generate-video'),
-    btnGenerateArticle: $('#btn-generate-article'),
-    draftList: $('#draft-list'),
-    draftEditor: $('#draft-editor'),
-    draftTitleEditor: $('#draft-title-editor'),
-    draftContentEditor: $('#draft-content-editor'),
-    btnSaveDraft: $('#btn-save-draft'),
-    btnExportDraft: $('#btn-export-draft'),
+    btnNotesBack: $('#btn-notes-back'),
     bookDeleteModal: $('#book-delete-modal'),
     bookDeleteMessage: $('#book-delete-message'),
     btnCancelBookDelete: $('#btn-cancel-book-delete'),
@@ -204,30 +182,39 @@
       req.onupgradeneeded = (e) => {
         const d = e.target.result;
 
-        // Books store
-        if (!d.objectStoreNames.contains('books')) {
-          const booksStore = d.createObjectStore('books', { keyPath: 'id' });
+        const transaction = e.target.transaction;
+        const booksStore = d.objectStoreNames.contains('books')
+          ? transaction.objectStore('books')
+          : d.createObjectStore('books', { keyPath: 'id' });
+        if (!booksStore.indexNames.contains('by_title')) {
           booksStore.createIndex('by_title', 'book_title', { unique: false });
         }
 
-        // Highlights store
-        if (!d.objectStoreNames.contains('highlights')) {
-          const hStore = d.createObjectStore('highlights', { keyPath: 'id' });
-          hStore.createIndex('by_book', 'book_id', { unique: false });
-          hStore.createIndex('by_synced', 'synced', { unique: false });
+        const highlightsStore = d.objectStoreNames.contains('highlights')
+          ? transaction.objectStore('highlights')
+          : d.createObjectStore('highlights', { keyPath: 'id' });
+        if (!highlightsStore.indexNames.contains('by_book')) {
+          highlightsStore.createIndex('by_book', 'book_id', { unique: false });
+        }
+        if (!highlightsStore.indexNames.contains('by_synced')) {
+          highlightsStore.createIndex('by_synced', 'synced', { unique: false });
         }
 
         if (!d.objectStoreNames.contains('deleted_highlights')) {
           d.createObjectStore('deleted_highlights', { keyPath: 'id' });
         }
 
-        if (!d.objectStoreNames.contains('bookmarks')) {
-          const bStore = d.createObjectStore('bookmarks', { keyPath: 'id' });
-          bStore.createIndex('by_book', 'book_id', { unique: false });
+        const bookmarksStore = d.objectStoreNames.contains('bookmarks')
+          ? transaction.objectStore('bookmarks')
+          : d.createObjectStore('bookmarks', { keyPath: 'id' });
+        if (!bookmarksStore.indexNames.contains('by_book')) {
+          bookmarksStore.createIndex('by_book', 'book_id', { unique: false });
         }
 
-        if (!d.objectStoreNames.contains('sync_queue')) {
-          const syncStore = d.createObjectStore('sync_queue', { keyPath: 'id' });
+        const syncStore = d.objectStoreNames.contains('sync_queue')
+          ? transaction.objectStore('sync_queue')
+          : d.createObjectStore('sync_queue', { keyPath: 'id' });
+        if (!syncStore.indexNames.contains('by_book')) {
           syncStore.createIndex('by_book', 'book_id', { unique: false });
         }
       };
@@ -488,10 +475,61 @@
   }
 
   async function showLibrary() {
-    // Flush progress to IndexedDB before clearing state
-    await saveCurrentProgress();
+    await navigateToRoute('/');
+  }
 
-    // Destroy epub.js resources BEFORE nulling references
+  function showReader() {
+    dom.libraryView.classList.remove('active');
+    dom.readerView.classList.add('active');
+    dom.creationView.classList.remove('active');
+    setReaderChromeVisible(true);
+    setActiveNav('read');
+    syncReaderToolStates();
+    syncReaderPanelBackdrop();
+    if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
+  }
+
+  async function showCreation() {
+    await navigateToRoute('/creation');
+  }
+
+  function getRouteFromHash() {
+    const route = window.location.hash.replace(/^#/, '') || '/';
+    return ['/', '/reader', '/creation'].includes(route) ? route : '/';
+  }
+
+  async function navigateToRoute(route, { replace = false } = {}) {
+    const hash = `#${route}`;
+    if (replace) {
+      history.replaceState({}, '', hash);
+    } else if (window.location.hash !== hash) {
+      history.pushState({}, '', hash);
+    }
+    await applyCurrentRoute();
+  }
+
+  async function applyCurrentRoute() {
+    let route = getRouteFromHash();
+    if (route === '/reader') {
+      if (currentBookMeta) {
+        showReader();
+        return;
+      }
+      history.replaceState({}, '', '#/');
+      route = '/';
+    }
+    if (route === '/creation') {
+      dom.libraryView.classList.remove('active');
+      dom.readerView.classList.remove('active');
+      dom.creationView.classList.add('active');
+      resetReaderChrome();
+      closeMobileReaderPanels();
+      syncReaderPanelBackdrop();
+      setActiveNav('create');
+      return;
+    }
+
+    await saveCurrentProgress();
     if (currentRendition) {
       try { currentRendition.destroy(); } catch (_e) { /* already destroyed */ }
       currentRendition = null;
@@ -500,25 +538,17 @@
       try { currentBook.destroy(); } catch (_e) { /* already destroyed */ }
       currentBook = null;
     }
-
-    // Clear epub.js resources without deleting the persistent loading overlay.
     Array.from(dom.epubContainer.children).forEach((child) => {
       if (child !== dom.readerLoading) child.remove();
     });
     dom.epubContainer.style.display = '';
-
-    // Reset all reader state
     currentCfi = '';
     currentChapter = '';
     pendingSelection = null;
-    selectedMaterialId = null;
-    selectedMaterialIds.clear();
-    currentDraftId = null;
     progressJumpToken = 0;
     _boundIframeDocuments = new WeakSet();
     locationsReadyPromise = null;
     locationsReadyBook = null;
-
     dom.libraryView.classList.add('active');
     dom.readerView.classList.remove('active');
     dom.creationView.classList.remove('active');
@@ -534,29 +564,10 @@
       currentBookUrl = null;
     }
     currentBookMeta = null;
-    renderLibrary();
-  }
-
-  function showReader() {
-    dom.libraryView.classList.remove('active');
-    dom.readerView.classList.add('active');
-    dom.creationView.classList.remove('active');
-    setReaderChromeVisible(true);
-    setActiveNav('read');
-    syncReaderToolStates();
-    syncReaderPanelBackdrop();
-    if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
-  }
-
-  async function showCreation() {
-    dom.libraryView.classList.remove('active');
-    dom.readerView.classList.remove('active');
-    dom.creationView.classList.add('active');
-    resetReaderChrome();
-    closeMobileReaderPanels();
-    syncReaderPanelBackdrop();
-    setActiveNav('create');
-    await renderCreationWorkspace();
+    await renderLibrary();
+    if (route !== '/') {
+      history.replaceState({}, '', '#/');
+    }
   }
 
   function setActiveNav(target) {
@@ -1725,6 +1736,8 @@
   }
 
   async function openBook(bookMeta, { skipSync = false } = {}) {
+    currentBookMeta = bookMeta;
+    await navigateToRoute('/reader');
     showReader();
     setReaderLoading('正在打开书籍…', '正在准备阅读器');
     setLoadingProgress(5);
@@ -3701,15 +3714,10 @@
       await queueHighlightDelete(h);
     }
     await dbDelete('highlights', highlightId);
-    selectedMaterialIds.delete(highlightId);
-    if (selectedMaterialId === highlightId) {
-      clearSelectedMaterial();
-    }
     if (editingHighlightId === highlightId) {
       closeNoteEditor();
     }
     await renderNotes();
-    await renderMaterials();
     updateSyncBadge();
     showToast('已删除', 'info');
   }
@@ -4471,277 +4479,6 @@
     }
   }
 
-  // ==================== CREATION WORKSPACE ====================
-  async function renderCreationWorkspace() {
-    await renderMaterials();
-    await renderDrafts();
-  }
-
-  async function getFilteredLocalMaterials() {
-    const bookFilter = dom.materialBookFilter.value.trim();
-    const tagFilter = dom.materialTagFilter.value.trim();
-    let materials = await dbGetAll('highlights');
-    if (bookFilter) {
-      materials = materials.filter(h => (h.book_title || '').includes(bookFilter));
-    }
-    if (tagFilter) {
-      materials = materials.filter(h => (h.tags || []).some(t => t.includes(tagFilter)));
-    }
-    materials.sort((a, b) => {
-      const bookCompare = (a.book_title || '').localeCompare(b.book_title || '', 'zh-CN');
-      if (bookCompare !== 0) return bookCompare;
-      return (a.progress_percent || 0) - (b.progress_percent || 0);
-    });
-    return materials;
-  }
-
-  async function renderMaterials() {
-    const materials = await getFilteredLocalMaterials();
-    dom.materialsList.innerHTML = '';
-
-    if (materials.length === 0) {
-      dom.materialsList.innerHTML = '<div class="empty-notes">还没有素材。先去阅读页划线并保存感悟。</div>';
-      updateSelectedMaterialCount();
-      return;
-    }
-
-    for (const h of materials) {
-      const item = document.createElement('div');
-      item.className = `material-card highlight-${h.color || 'yellow'}`;
-      if (selectedMaterialIds.has(h.id)) item.classList.add('selected');
-      item.dataset.highlightId = h.id;
-      const tags = (h.tags || []).map(t => `<span class="note-item-tag">${escapeHTML(t)}</span>`).join('');
-      item.innerHTML = `
-        <label class="material-check">
-          <input type="checkbox" ${selectedMaterialIds.has(h.id) ? 'checked' : ''}>
-          <span>${escapeHTML(h.book_title || '未命名书籍')}</span>
-        </label>
-        <div class="material-quote">${escapeHTML(h.highlight_text || '')}</div>
-        <div class="material-note ${h.note ? 'has-note' : ''}">${escapeHTML(h.note || '还没有感悟')}</div>
-        <div class="note-item-tags">${tags}</div>
-        <div class="note-item-meta">${h.progress_percent || 0}% · ${h.status || 'raw'} · ${h.synced ? '已同步' : '未同步'}</div>
-      `;
-
-      item.querySelector('input').addEventListener('change', (e) => {
-        if (e.target.checked) {
-          selectedMaterialIds.add(h.id);
-        } else {
-          selectedMaterialIds.delete(h.id);
-        }
-        updateSelectedMaterialCount();
-        item.classList.toggle('selected', e.target.checked);
-      });
-      item.addEventListener('click', (e) => {
-        if (e.target.tagName === 'INPUT') return;
-        openMaterialForReflection(h.id);
-      });
-      dom.materialsList.appendChild(item);
-    }
-    updateSelectedMaterialCount();
-  }
-
-  async function openMaterialForReflection(highlightId) {
-    const h = await dbGet('highlights', highlightId);
-    if (!h) return;
-    selectedMaterialId = highlightId;
-    dom.selectedMaterialDetail.innerHTML = `
-      <div class="selected-quote">
-        <div class="note-item-meta">${escapeHTML(h.book_title || '')} · ${escapeHTML(h.chapter || '')} · ${h.progress_percent || 0}%</div>
-        <blockquote>${escapeHTML(h.highlight_text || '')}</blockquote>
-      </div>
-    `;
-    dom.reflectionEditor.value = h.note || '';
-    dom.btnSaveReflection.disabled = false;
-    dom.btnDeleteReflection.disabled = !h.note;
-  }
-
-  function updateSelectedMaterialCount() {
-    dom.selectedMaterialCount.textContent = `${selectedMaterialIds.size} 条已选`;
-  }
-
-  function clearSelectedMaterial() {
-    selectedMaterialId = null;
-    dom.selectedMaterialDetail.innerHTML = '<p class="empty-hint">从左侧选择一条素材后编辑感悟；勾选多条素材后可生成内容。</p>';
-    dom.reflectionEditor.value = '';
-    dom.btnSaveReflection.disabled = true;
-    dom.btnDeleteReflection.disabled = true;
-  }
-
-  async function saveCurrentReflection() {
-    if (!selectedMaterialId) return;
-    const h = await dbGet('highlights', selectedMaterialId);
-    if (!h) return;
-    h.note = dom.reflectionEditor.value.trim();
-    h.status = h.note ? 'reflected' : 'raw';
-    h.updated_at = new Date().toISOString();
-    h.synced = false;
-    await dbPut('highlights', h);
-    const reflectionBook = await dbGet('books', h.book_id);
-    if (reflectionBook &&
-        (reflectionBook.server_book_id || reflectionBook.source === 'server')) {
-      await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
-    }
-    await renderMaterials();
-    dom.btnDeleteReflection.disabled = !h.note;
-    updateSyncBadge();
-    showToast('感悟已保存', 'success');
-  }
-
-  async function deleteCurrentReflection() {
-    if (!selectedMaterialId) return;
-    const h = await dbGet('highlights', selectedMaterialId);
-    if (!h || !h.note) return;
-    if (!confirm('确定删除这条感悟吗？划线和标签会保留。')) return;
-
-    h.note = '';
-    h.status = 'raw';
-    h.updated_at = new Date().toISOString();
-    h.synced = false;
-    await dbPut('highlights', h);
-    const reflectionBook = await dbGet('books', h.book_id);
-    if (reflectionBook &&
-        (reflectionBook.server_book_id || reflectionBook.source === 'server')) {
-      await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
-    }
-    dom.reflectionEditor.value = '';
-    dom.btnDeleteReflection.disabled = true;
-    await renderMaterials();
-    await renderNotes();
-    updateSyncBadge();
-    showToast('感悟已删除', 'info');
-  }
-
-  async function generateDraft(target) {
-    if (selectedMaterialIds.size === 0) {
-      showToast('请先勾选素材', 'info');
-      return;
-    }
-
-    await syncToBackend();
-    const payload = {
-      target,
-      highlight_ids: Array.from(selectedMaterialIds),
-      topic: dom.draftTopic.value.trim(),
-      tone: '',
-      extra_instruction: dom.draftInstruction.value.trim(),
-    };
-
-    const button = target === 'video' ? dom.btnGenerateVideo : dom.btnGenerateArticle;
-    button.disabled = true;
-    button.textContent = '生成中...';
-    try {
-      const resp = await fetch(API_BASE + '/api/drafts/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) {
-        const error = await resp.json().catch(() => ({}));
-        throw new Error(error.detail || `Server responded with ${resp.status}`);
-      }
-      const draft = await resp.json();
-      await renderDrafts();
-      openDraftEditor(draft);
-      showToast('稿件已生成', 'success');
-    } catch (err) {
-      console.error('Draft generation failed:', err);
-      showToast('生成失败：' + err.message, 'error');
-    } finally {
-      button.disabled = false;
-      button.textContent = target === 'video' ? '生成视频号稿' : '生成公众号稿';
-    }
-  }
-
-  async function renderDrafts() {
-    try {
-      const resp = await fetch(API_BASE + '/api/drafts');
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const drafts = data.drafts || [];
-      dom.draftList.innerHTML = '';
-      if (drafts.length === 0) {
-        dom.draftList.innerHTML = '<div class="empty-notes">还没有生成稿件</div>';
-        return;
-      }
-      for (const draft of drafts) {
-        const item = document.createElement('div');
-        item.className = 'draft-card';
-        item.innerHTML = `
-          <div class="draft-card-title">${escapeHTML(draft.title || '未命名稿件')}</div>
-          <div class="note-item-meta">${draft.target === 'video' ? '视频号' : '公众号'} · ${draft.exported_to_obsidian ? '已导出' : '未导出'}</div>
-        `;
-        item.addEventListener('click', () => openDraftEditor(draft));
-        dom.draftList.appendChild(item);
-      }
-    } catch (e) {
-      console.warn('Failed to fetch drafts:', e);
-    }
-  }
-
-  function openDraftEditor(draft) {
-    currentDraftId = draft.id;
-    dom.draftEditor.hidden = false;
-    dom.draftTitleEditor.value = draft.title || '';
-    dom.draftContentEditor.value = draft.content || '';
-  }
-
-  async function saveCurrentDraft() {
-    if (!currentDraftId) return;
-    const resp = await fetch(API_BASE + '/api/drafts/' + encodeURIComponent(currentDraftId), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: dom.draftTitleEditor.value.trim() || '未命名稿件',
-        content: dom.draftContentEditor.value,
-      }),
-    });
-    if (!resp.ok) {
-      showToast('草稿保存失败', 'error');
-      return;
-    }
-    const draft = await resp.json();
-    openDraftEditor(draft);
-    await renderDrafts();
-    showToast('草稿已保存', 'success');
-  }
-
-  async function exportCurrentDraft() {
-    if (!currentDraftId) return;
-    await exportToObsidian({ kind: 'draft', draft_id: currentDraftId });
-    await renderDrafts();
-  }
-
-  async function exportCurrentBook() {
-    const materials = await getFilteredLocalMaterials();
-    const selected = selectedMaterialId ? await dbGet('highlights', selectedMaterialId) : materials[0];
-    const bookTitle = selected ? selected.book_title : dom.materialBookFilter.value.trim();
-    if (!bookTitle) {
-      showToast('请先选择一本书或输入书名筛选', 'info');
-      return;
-    }
-    await syncToBackend();
-    await exportToObsidian({ kind: 'book', book_title: bookTitle });
-  }
-
-  async function exportToObsidian(payload) {
-    try {
-      const resp = await fetch(API_BASE + '/api/obsidian/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) {
-        const error = await resp.json().catch(() => ({}));
-        throw new Error(error.detail || `Server responded with ${resp.status}`);
-      }
-      const data = await resp.json();
-      showToast('已导出到 ' + data.path, 'success');
-    } catch (err) {
-      console.error('Obsidian export failed:', err);
-      showToast('导出失败：' + err.message, 'error');
-    }
-  }
-
   // ==================== PWA ====================
   function registerSW() {
     if (!('serviceWorker' in navigator)) return;
@@ -4789,7 +4526,7 @@
     dom.btnNavLibrary.addEventListener('click', showLibrary);
     dom.btnNavRead.addEventListener('click', () => {
       if (currentBookMeta && currentRendition) {
-        showReader();
+        navigateToRoute('/reader');
       } else {
         showLibrary();
         showToast('请先从书库打开一本书', 'info');
@@ -4797,6 +4534,9 @@
     });
     dom.btnNavCreate.addEventListener('click', showCreation);
     dom.btnLibraryCreate.addEventListener('click', showCreation);
+    dom.btnNotesBack.addEventListener('click', showLibrary);
+    window.addEventListener('hashchange', () => applyCurrentRoute());
+    window.addEventListener('popstate', () => applyCurrentRoute());
 
     // File import
     dom.fileInput.addEventListener('change', (e) => {
@@ -4911,18 +4651,6 @@
 
     // Sync button
     dom.btnSync.addEventListener('click', syncToBackend);
-
-    // Creation workspace
-    dom.btnRefreshMaterials.addEventListener('click', renderCreationWorkspace);
-    dom.materialBookFilter.addEventListener('input', renderMaterials);
-    dom.materialTagFilter.addEventListener('input', renderMaterials);
-    dom.btnSaveReflection.addEventListener('click', saveCurrentReflection);
-    dom.btnDeleteReflection.addEventListener('click', deleteCurrentReflection);
-    dom.btnGenerateVideo.addEventListener('click', () => generateDraft('video'));
-    dom.btnGenerateArticle.addEventListener('click', () => generateDraft('article'));
-    dom.btnSaveDraft.addEventListener('click', saveCurrentDraft);
-    dom.btnExportDraft.addEventListener('click', exportCurrentDraft);
-    dom.btnExportBook.addEventListener('click', exportCurrentBook);
 
     // Highlight color buttons
     dom.selectionToolbar.querySelectorAll('.btn-highlight').forEach(btn => {
@@ -5048,7 +4776,10 @@
     bindEvents();
     syncReaderToolStates();
     registerSW();
-    await renderLibrary();
+    if (!window.location.hash) {
+      history.replaceState({}, '', '#/');
+    }
+    await applyCurrentRoute();
     await updateSyncBadge();
     refreshServerLibrary().catch(() => {});
     migrateLocalBooksToServer().catch(() => {});

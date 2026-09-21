@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { INDEXED_DB_VERSION } from './helpers/notes-management.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(__dirname, 'fixtures', 'multichapter.epub');
@@ -20,6 +21,7 @@ async function openFixture(page, url = '/index.html') {
   await page.setInputFiles('#file-input', FIXTURE);
   await expect(page.locator('#toolbar-book-title')).toContainText(/multichapter/i, { timeout: 15_000 });
   await expect(page.locator('#reader-view')).toHaveClass(/active/);
+  await expect(page).toHaveURL(/#\/reader$/);
 }
 
 async function doubleTapIframeWithTouchscreen(page) {
@@ -286,23 +288,30 @@ test.describe('@mobile mobile layout', () => {
     await expect(page.locator('#btn-nav-create')).toHaveClass(/active/);
     await expectNoHorizontalOverflow(page);
 
-    const flowMetrics = await page.evaluate(() => {
-      const steps = document.querySelector('.creation-steps').getBoundingClientRect();
-      const firstPane = document.querySelector('.workspace-pane').getBoundingClientRect();
-      return { stepsHeight: steps.height, stepsBottom: steps.bottom, firstPaneTop: firstPane.top };
+    const shellMetrics = await page.evaluate(() => {
+      const filters = document.querySelector('.notes-filter-row').getBoundingClientRect();
+      const layout = document.querySelector('.notes-management-layout').getBoundingClientRect();
+      const detail = document.querySelector('.notes-detail-pane');
+      return {
+        filtersHeight: filters.height,
+        filtersBottom: filters.bottom,
+        layoutTop: layout.top,
+        detailDisplay: getComputedStyle(detail).display,
+      };
     });
-    expect(flowMetrics.stepsHeight).toBeGreaterThanOrEqual(40);
-    expect(flowMetrics.firstPaneTop).toBeGreaterThanOrEqual(flowMetrics.stepsBottom - 1);
+    expect(shellMetrics.filtersHeight).toBeGreaterThanOrEqual(44);
+    expect(shellMetrics.layoutTop).toBeGreaterThanOrEqual(shellMetrics.filtersBottom - 1);
+    expect(shellMetrics.detailDisplay).toBe('none');
 
-    const paneWidths = await page.locator('.workspace-pane').evaluateAll((panes) => (
-      panes.map((pane) => {
-        const rect = pane.getBoundingClientRect();
+    const shellWidths = await page.locator('.notes-shell-section').evaluateAll((sections) => (
+      sections.map((section) => {
+        const rect = section.getBoundingClientRect();
         return { left: rect.left, right: rect.right, viewport: window.innerWidth };
       })
     ));
-    for (const pane of paneWidths) {
-      expect(pane.left).toBeGreaterThanOrEqual(0);
-      expect(pane.right).toBeLessThanOrEqual(pane.viewport + 1);
+    for (const section of shellWidths) {
+      expect(section.left).toBeGreaterThanOrEqual(0);
+      expect(section.right).toBeLessThanOrEqual(section.viewport + 1);
     }
   });
 
@@ -609,8 +618,8 @@ test.describe('@mobile mobile layout', () => {
     await expect(toolbar).toBeHidden();
     await expect(page.locator('#notes-count')).toHaveText('1 条');
 
-    const savedHighlight = await page.evaluate(() => new Promise((resolve, reject) => {
-      const request = indexedDB.open('marginalia', 5);
+    const savedHighlight = await page.evaluate(databaseVersion => new Promise((resolve, reject) => {
+      const request = indexedDB.open('marginalia', databaseVersion);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const db = request.result;
@@ -620,7 +629,7 @@ test.describe('@mobile mobile layout', () => {
         allRequest.onerror = () => reject(allRequest.error);
         transaction.oncomplete = () => db.close();
       };
-    }));
+    }), INDEXED_DB_VERSION);
     expect(savedHighlight.highlight_text).toBe(selectedText);
     expect(savedHighlight.cfi).toMatch(/^epubcfi\(.*,.+,.+\)$/);
     expect(savedHighlight.color).toBe('yellow');
