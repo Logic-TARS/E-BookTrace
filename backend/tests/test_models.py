@@ -1,14 +1,53 @@
 """Tests for Pydantic models (backend/models.py)."""
 
 import pytest
+from pydantic import ValidationError
+
 from models import (
+    BookSyncRequest,
     HighlightCreate,
     HighlightUpdate,
-    SyncRequest,
-    SyncResponse,
+    NoteBatchIdsRequest,
+    NoteBatchTagsRequest,
     ScriptRequest,
     ScriptResponse,
+    SyncRequest,
+    SyncResponse,
 )
+
+
+def test_book_sync_request_keeps_legacy_default_and_accepts_v2():
+    assert BookSyncRequest(operations=[]).protocol_version is None
+    assert BookSyncRequest(protocol_version=2, operations=[]).protocol_version == 2
+
+
+def test_note_batch_tags_normalizes_ids_and_tags():
+    request = NoteBatchTagsRequest(
+        operation_id=" operation-1 ",
+        ids=[" note-1 ", "note-1", "note-2"],
+        action="add",
+        tags=[" 哲学 ", "", "哲学", "阅读"],
+    )
+    assert request.operation_id == "operation-1"
+    assert request.ids == ["note-1", "note-2"]
+    assert request.tags == ["哲学", "阅读"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"operation_id": " ", "ids": ["note-1"]},
+        {"operation_id": "operation-1", "ids": []},
+        {"operation_id": "operation-1", "ids": [" "]},
+        {
+            "operation_id": "operation-1",
+            "ids": [f"note-{index}" for index in range(101)],
+        },
+    ],
+)
+def test_note_batch_ids_rejects_invalid_payload(payload):
+    with pytest.raises(ValidationError):
+        NoteBatchIdsRequest(**payload)
 
 
 class TestHighlightCreate:

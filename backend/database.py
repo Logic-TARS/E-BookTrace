@@ -46,6 +46,7 @@ async def init_db() -> None:
         await _ensure_column(db, "updated_at", "TEXT")
         await _ensure_column(db, "status", "TEXT DEFAULT 'raw'")
         await _ensure_column(db, "knowledge_book_id", "TEXT")
+        await _ensure_column(db, "deleted_at", "TEXT")
         await db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_highlights_client_id
@@ -55,6 +56,24 @@ async def init_db() -> None:
         )
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_highlights_book_id ON highlights(book_id)"
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_highlights_view_updated
+            ON highlights(deleted_at, updated_at DESC)
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_highlights_view_book
+            ON highlights(deleted_at, book_id)
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_highlights_view_position
+            ON highlights(deleted_at, book_title, progress_percent)
+            """
         )
         await db.execute("""
             CREATE TABLE IF NOT EXISTS drafts (
@@ -67,6 +86,15 @@ async def init_db() -> None:
                 created_at TEXT,
                 updated_at TEXT,
                 exported_to_obsidian INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS note_batch_operations (
+                operation_id TEXT PRIMARY KEY,
+                operation_type TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
         await db.commit()
