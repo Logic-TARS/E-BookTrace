@@ -185,7 +185,8 @@ async def list_notes_endpoint(
         offset=offset,
     )
     for item in result["items"]:
-        item["cfi_range"] = item.pop("cfi", "")
+        if "cfi" in item:
+            item["cfi_range"] = item.pop("cfi")
     return result
 
 

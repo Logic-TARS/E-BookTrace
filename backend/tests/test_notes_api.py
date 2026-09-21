@@ -128,6 +128,50 @@ def test_list_notes_endpoint_validates_query_and_returns_facets(client, seeded_n
     assert response.headers["cache-control"] == "private, no-store"
 
 
+def test_list_notes_endpoint_preserves_legacy_cfi_range(tmp_path, monkeypatch):
+    path = tmp_path / "legacy-notes-api.db"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE highlights (
+            id TEXT PRIMARY KEY,
+            client_id TEXT,
+            book_id TEXT,
+            book_title TEXT NOT NULL,
+            book_author TEXT DEFAULT '',
+            chapter TEXT DEFAULT '',
+            cfi_range TEXT,
+            highlight_text TEXT NOT NULL,
+            note TEXT DEFAULT '',
+            tags TEXT DEFAULT '[]',
+            color TEXT DEFAULT 'yellow',
+            created_at TEXT,
+            received_at TEXT,
+            updated_at TEXT,
+            progress_percent REAL DEFAULT 0,
+            status TEXT DEFAULT 'raw',
+            knowledge_base_id TEXT,
+            deleted_at TEXT
+        );
+        INSERT INTO highlights (
+            id, book_id, book_title, cfi_range, highlight_text,
+            created_at, received_at, updated_at
+        ) VALUES (
+            'legacy-note', 'legacy-book', '旧书', 'epubcfi(/6/8)', '旧划线',
+            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+            '2026-01-01T00:00:00Z'
+        );
+        """
+    )
+    connection.close()
+    monkeypatch.setattr(database, "DB_PATH", path)
+
+    response = TestClient(app).get("/api/notes")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["cfi_range"] == "epubcfi(/6/8)"
+
+
 @pytest.mark.parametrize("query", ["字", " 字 "])
 def test_list_notes_endpoint_rejects_one_character_search(client, query):
     response = client.get("/api/notes", params={"q": query})
