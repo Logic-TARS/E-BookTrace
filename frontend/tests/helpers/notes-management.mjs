@@ -137,7 +137,6 @@ export async function installNotesApiRoutes(page, state = {}) {
   state.books ??= [];
   state.notes ??= [];
   state.requests ??= [];
-
   await page.route('**/api/**', async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -175,9 +174,10 @@ export async function installNotesApiRoutes(page, state = {}) {
       const view = url.searchParams.get('view') || 'active';
       const offset = Number(url.searchParams.get('offset') || 0);
       const limit = Number(url.searchParams.get('limit') || 50);
+      const q = (url.searchParams.get('q') || '').toLowerCase();
       const matching = state.notes.filter(note => (
         view === 'trash' ? Boolean(note.deleted_at) : !note.deleted_at
-      ));
+      )).filter(note => !q || `${note.highlight_text} ${note.note}`.toLowerCase().includes(q));
       const items = matching.slice(offset, offset + limit);
       await route.fulfill({
         json: {
@@ -186,7 +186,12 @@ export async function installNotesApiRoutes(page, state = {}) {
           limit,
           offset,
           has_more: offset + items.length < matching.length,
-          facets: state.facets || { books: [], tags: [], note_kinds: [], colors: [] },
+          facets: state.facets || {
+            books: state.notes.map(note => ({ id: note.book_id, title: note.book_title })),
+            tags: [...new Set(state.notes.flatMap(note => note.tags || []))],
+            note_kinds: [...new Set(state.notes.map(note => note.note ? 'reflected' : 'highlight'))],
+            colors: [...new Set(state.notes.map(note => note.color).filter(Boolean))],
+          },
         },
       });
       return;

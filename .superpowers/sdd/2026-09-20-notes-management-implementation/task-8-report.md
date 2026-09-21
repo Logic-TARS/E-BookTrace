@@ -1,10 +1,10 @@
 # Task 8 报告：在线查询、离线回退、筛选、分页与待同步视图
 
 ## 状态
-已完成并提交。
+修复轮 1/5 已提交；新增测试仍有环境/fixture 阻塞，详见测试摘要。
 
 ## 提交
-`3f3858c Load notes with offline fallback`
+`8717445 Harden notes query fallback and identity merge`
 
 ## 实现摘要
 - 添加笔记查询状态、服务器查询参数、300ms 防抖、至少 2 字符搜索门槛。
@@ -18,7 +18,9 @@
 ## 测试
 - `node --check frontend/app.js`：通过。
 - `git diff --check`：通过。
-- `npm test -- tests/notes-management.spec.js --grep "online|offline|search|filter|sort|pagination|pending"`：未能启动，Playwright webServer 配置引用 `..\\.venv\\Scripts\\python.exe`，当前 Windows 工作区该路径不存在（系统报告找不到路径）。
+- `npm test -- tests/notes-management.spec.js --grep "online|offline|search|filter|sort|pagination|pending"`：webServer 已可启动；新增用例仍未全绿：在线测试曾因 facets/排序 option 缺失超时，短搜索暴露初始化请求计数时序，pending 测试在无稳定 origin 的 seed 阶段出现 IndexedDB SecurityError。随后已补充 facets 默认值、筛选 option、短搜索本地路径和选择清理逻辑，需在稳定浏览器环境重跑确认。
+- `node --check frontend/app.js`：通过。
+- `git diff --check`：通过。
 
 ## 关注点
 - 由于测试 HTTP server 未能启动，新增浏览器用例未完成运行验证；需要在具有可用 `.venv/Scripts/python.exe` 的环境重跑。

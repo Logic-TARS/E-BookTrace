@@ -90,6 +90,8 @@
   let notesLoaded = false;
   let notesLoadError = null;
   let notesSearchTimer = null;
+  let notesFacets = null;
+  const notesSelection = new Set();
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -192,6 +194,7 @@
     notesNext: $('#btn-notes-next'),
     notesPageStatus: $('#notes-page-status'),
     notesLiveStatus: $('#notes-live-status'),
+    notesSelectPage: $('#notes-select-page'),
     btnNotesTrash: $('#btn-toggle-notes-trash'),
     btnClearNoteFilters: $('#btn-clear-note-filters'),
     bookDeleteModal: $('#book-delete-modal'),
@@ -1029,7 +1032,8 @@
   }
 
   async function getBookHighlightCount(bookId) {
-    const highlights = await dbGetByIndex('highlights', 'by_book', bookId);
+    const highlights = (await dbGetByIndex('highlights', 'by_book', bookId))
+      .filter(highlight => !highlight.deleted_at);
     return highlights.length;
   }
 
@@ -3997,6 +4001,7 @@
 
     // Get highlights for this book
     dbGetByIndex('highlights', 'by_book', currentBookMeta.id).then((highlights) => {
+      highlights = highlights.filter(highlight => !highlight.deleted_at);
       if (!highlights || highlights.length === 0) return;
 
       // Apply epub.js annotations for each highlight
@@ -4197,7 +4202,7 @@
 
   async function collectBookQaContext(question) {
     const highlights = currentBookMeta
-      ? await dbGetByIndex('highlights', 'by_book', currentBookMeta.id)
+      ? (await dbGetByIndex('highlights', 'by_book', currentBookMeta.id)).filter(highlight => !highlight.deleted_at)
       : [];
     highlights.sort((a, b) => (a.progress_percent || 0) - (b.progress_percent || 0));
     return {
@@ -4405,18 +4410,26 @@
   }
 
   async function fetchServerNotes(query) {
+    if (String(query.q || '').trim().length === 1) {
+      throw new Error('至少输入 2 个字符');
+    }
     const response = await fetchWithTimeout(API_BASE + '/api/notes?' + buildNotesQueryParams(query));
     if (!response.ok) throw new Error(`Server responded with ${response.status}`);
     return response.json();
   }
 
+  function getNoteAliases(note) {
+    return [note.server_id, note.id, note.client_id].filter(Boolean).map(String);
+  }
+
   function getStableNoteKey(note) {
-    return String(note.server_id || note.id || note.client_id || '');
+    return getNoteAliases(note)[0] || '';
   }
 
   function filterAndSortLocalNotes(items, query) {
     const q = String(query.q || '').trim().toLowerCase();
     return items.filter(note => {
+      if (q.length === 1) return false;
       if (query.view === 'trash' ? !note.deleted_at : note.deleted_at) return false;
       if (query.bookId && note.book_id !== query.bookId) return false;
       if (query.noteKind === 'reflected' && !note.note) return false;
@@ -4430,31 +4443,65 @@
 
   async function loadOfflineNotes(query) {
     const local = await dbGetAllSafe('highlights');
-    return { items: filterAndSortLocalNotes(local, query), total: local.length, has_more: false, facets: {} };
+    const items = filterAndSortLocalNotes(local, query);
+    return { items, total: items.length, has_more: false, facets: {} };
   }
 
-  async function loadPendingNotes() {
+  async function loadPendingNotes(query = notesQuery) {
     const [local, queued] = await Promise.all([
       dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue'),
     ]);
-    const pendingKeys = new Set(queued.map(operation => String(operation.entity_id || '')));
-    return filterAndSortLocalNotes(local.filter(note => pendingKeys.has(String(note.id)) || !note.synced), notesQuery);
+    const pendingKeys = new Set(queued.flatMap(operation => [operation.entity_id, operation.payload?.id, operation.payload?.client_id, operation.payload?.server_id]
+      .filter(Boolean).map(String)));
+    const pendingQuery = { ...query };
+    return filterAndSortLocalNotes(local.filter(note => pendingKeys.has(String(note.id))
+      || pendingKeys.has(String(note.client_id)) || pendingKeys.has(String(note.server_id)) || !note.synced), pendingQuery);
   }
 
   function mergeServerAndLocalNotes(serverItems, localItems, queuedOperations) {
-    const merged = new Map(localItems.map(item => [getStableNoteKey(item), item]));
-    serverItems.forEach(item => merged.set(getStableNoteKey(item), item));
+    const aliases = new Map();
+    const merged = new Map();
+    const add = (item, allowNew) => {
+      const known = getNoteAliases(item).map(alias => aliases.get(alias)).find(Boolean);
+      const key = known || getStableNoteKey(item);
+      if (!key || (!allowNew && !merged.has(key))) return;
+      merged.set(key, { ...merged.get(key), ...item });
+      getNoteAliases(item).forEach(alias => aliases.set(alias, key));
+    };
+    serverItems.forEach(item => add(item, true));
+    localItems.filter(item => !item.synced).forEach(item => add(item, false));
     queuedOperations.forEach(operation => {
-      const key = String(operation.entity_id || '');
       const payload = operation.payload || {};
+      const operationAliases = [operation.entity_id, payload.id, payload.client_id, payload.server_id].filter(Boolean).map(String);
+      const key = operationAliases.map(alias => aliases.get(alias) || alias).find(Boolean);
+      if (!key) return;
+      operationAliases.forEach(alias => aliases.set(alias, key));
       if (operation.type.endsWith('.delete') || operation.type.endsWith('.trash')) merged.delete(key);
-      else if (key) merged.set(key, { ...merged.get(key), ...payload, synced: false });
+      else merged.set(key, { ...merged.get(key), ...payload, synced: false });
     });
     return [...merged.values()];
   }
 
+  function renderNotesFacets(facets) {
+    if (!facets) return;
+    const fill = (element, values, valueKey, labelKey) => {
+      if (!element || !Array.isArray(values)) return;
+      const current = element.value;
+      element.innerHTML = '<option value="">全部</option>' + values.map(value => {
+        const optionValue = typeof value === 'object' ? value[valueKey] : value;
+        const label = typeof value === 'object' ? (value[labelKey] || optionValue) : value;
+        return `<option value="${escapeHTML(optionValue)}">${escapeHTML(label)}</option>`;
+      }).join('');
+      if ([...element.options].some(option => option.value === current)) element.value = current;
+    };
+    fill(dom.notesBookFilter, facets.books, 'id', 'title');
+    fill(dom.notesTagFilter, facets.tags, 'value', 'label');
+    fill(dom.notesColorFilter, facets.colors, 'value', 'label');
+  }
+
   function renderNotesManagement(items) {
     if (!dom.notesList) return;
+    if (dom.notesSelectPage) dom.notesSelectPage.checked = false;
     dom.notesList.innerHTML = items.length ? items.map(note => `
       <article class="note-management-card">
         <strong>${escapeHTML(note.highlight_text || '')}</strong>
@@ -4466,19 +4513,28 @@
     if (dom.notesNext) dom.notesNext.disabled = !notesHasMore;
   }
 
-  async function loadNotesManagement({ preserveDetail = false } = {}) {
-    const requestQuery = { ...notesQuery };
+  async function loadNotesManagement() {
+    const requestQuery = { ...notesQuery, q: String(notesQuery.q || '').trim() };
+    if (requestQuery.q.length === 1) {
+      notesItems = filterAndSortLocalNotes(await dbGetAllSafe('highlights'), requestQuery);
+      notesTotal = notesItems.length;
+      notesHasMore = false;
+      renderNotesManagement(notesItems);
+      return;
+    }
     try {
       if (requestQuery.dataScope === 'pending') {
-        notesItems = await loadPendingNotes();
+        notesItems = await loadPendingNotes(requestQuery);
         notesTotal = notesItems.length;
         notesHasMore = false;
       } else {
         const result = await fetchServerNotes(requestQuery);
         const [local, queued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
-        notesItems = mergeServerAndLocalNotes(result.items || [], local, queued);
-        notesTotal = result.total || notesItems.length;
+            notesItems = mergeServerAndLocalNotes(result.items || [], local, queued);
+        notesTotal = Number(result.total || 0);
         notesHasMore = Boolean(result.has_more);
+        notesFacets = result.facets || null;
+        renderNotesFacets(notesFacets);
         notesLoadError = null;
         if (dom.notesDataStatus) dom.notesDataStatus.textContent = '在线数据';
       }
@@ -4505,6 +4561,10 @@
 
   function updateNotesQuery(changes) {
     notesQuery = { ...notesQuery, ...changes, offset: 0 };
+    notesSelection.clear();
+    if (dom.notesSelectPage) dom.notesSelectPage.checked = false;
+    const oneCharacter = String(notesQuery.q || '').trim().length === 1;
+    if (oneCharacter && dom.notesDataStatus) dom.notesDataStatus.textContent = '至少输入 2 个字符';
     scheduleNotesManagementLoad();
   }
 
@@ -4557,7 +4617,8 @@
     book.state_revision = state.revision || 0;
     await dbPut('books', book);
 
-    const localHighlights = await dbGetByIndex('highlights', 'by_book', bookId);
+    const localHighlights = (await dbGetByIndex('highlights', 'by_book', bookId))
+      .filter(highlight => !highlight.deleted_at);
     const queuedOperations = dbHasStore('sync_queue')
       ? await dbGetByIndex('sync_queue', 'by_book', bookId)
       : [];
@@ -4745,7 +4806,10 @@
     notesFilterBindings.forEach(([element, key]) => element?.addEventListener('change', () => {
       updateNotesQuery({ [key]: key === 'tags' ? (element.value ? [element.value] : []) : element.value });
     }));
-    dom.notesSearch?.addEventListener('input', () => updateNotesQuery({ q: dom.notesSearch.value }));
+    dom.notesSearch?.addEventListener('input', () => {
+      updateNotesQuery({ q: dom.notesSearch.value });
+      if (dom.notesSearch.value.trim().length === 1) loadNotesManagement();
+    });
     dom.notesPendingOnly?.addEventListener('change', () => updateNotesQuery({ dataScope: dom.notesPendingOnly.value }));
     dom.btnNotesTrash?.addEventListener('click', () => updateNotesQuery({ view: notesQuery.view === 'trash' ? 'active' : 'trash' }));
     dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });

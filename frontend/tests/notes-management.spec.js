@@ -27,6 +27,7 @@ test.describe('notes management shell', () => {
     const state = { notes: [makeNote()], requests: [] };
     await installNotesApiRoutes(page, state);
     await page.goto('/#/creation');
+    state.requests.length = 0;
 
     await page.getByLabel('搜索笔记').fill('思想');
     await page.getByLabel('内容类型').selectOption('reflected');
@@ -43,14 +44,45 @@ test.describe('notes management shell', () => {
   });
 
   test('one character search stays local and shows guidance', async ({ page }) => {
-    const state = { notes: [], requests: [] };
+    const state = { notes: [makeNote({ highlight_text: '字本地内容' })], requests: [] };
     await installNotesApiRoutes(page, state);
     await page.goto('/#/creation');
+    await expect.poll(() => state.requests.filter(request => request.pathname === '/api/notes').length).toBeGreaterThan(0);
     state.requests.length = 0;
     await page.getByLabel('搜索笔记').fill('字');
     await page.waitForTimeout(400);
     expect(state.requests.filter(request => request.pathname === '/api/notes')).toHaveLength(0);
     await expect(page.getByText('至少输入 2 个字符')).toBeVisible();
+    await expect(page.getByText('字本地内容')).toBeVisible();
+  });
+
+  test('facets populate filter controls and selection clears on filter change', async ({ page }) => {
+    const state = {
+      notes: [makeNote()],
+      facets: { books: [{ id: 'book-1', title: '测试书' }], tags: ['阅读'], note_kinds: ['reflected'], colors: ['yellow'] },
+      requests: [],
+    };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await expect(page.locator('#notes-book-filter option[value="book-1"]')).toHaveCount(1);
+    await expect(page.locator('#notes-tag-filter option[value="阅读"]')).toHaveCount(1);
+    await expect(page.locator('#notes-color-filter option[value="yellow"]')).toHaveCount(1);
+    await page.locator('#notes-select-page').check();
+    await page.getByLabel('高亮颜色').selectOption('yellow');
+    await expect(page.locator('#notes-select-page')).not.toBeChecked();
+  });
+
+  test('queued aliases override server identity without adding cached unrelated notes', async ({ page }) => {
+    const local = makeNote({ id: 'local-id', client_id: 'client-id', server_id: null, highlight_text: '本地覆盖', synced: false });
+    await seedNotesIndexedDb(page, { highlights: [local], operations: [{
+      id: 'highlight.upsert:book-1:local-id', op_id: 'op-1', book_id: 'book-1',
+      type: 'highlight.upsert', entity_id: 'local-id', payload: local,
+    }] });
+    const state = { notes: [makeNote({ id: 'server-id', server_id: 'server-id', client_id: 'client-id', highlight_text: '服务器旧值' })], requests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await expect(page.getByText('本地覆盖')).toBeVisible();
+    await expect(page.getByText('服务器旧值')).toHaveCount(0);
   });
 
   test('initial API failure falls back to IndexedDB with incomplete warning', async ({ page }) => {
