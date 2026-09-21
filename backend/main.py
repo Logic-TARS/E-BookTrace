@@ -6,11 +6,11 @@ import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional
 
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +31,7 @@ from database import (
     get_draft,
     update_draft,
     delete_draft,
+    list_notes,
 )
 from models import (
     BookSyncRequest,
@@ -155,6 +156,37 @@ async def list_highlights(
         book_title=book_title, limit=limit, offset=offset
     )
     return {"highlights": highlights, "count": len(highlights)}
+
+
+@app.get("/api/notes")
+async def list_notes_endpoint(
+    q: Optional[str] = None,
+    book_id: Optional[str] = None,
+    tag: list[str] = Query(default=[]),
+    note_kind: Literal["all", "reflected", "highlight_only"] = "all",
+    color: Optional[Literal["yellow", "green", "blue", "pink"]] = None,
+    view: Literal["active", "trash"] = "active",
+    sort: Literal["updated_desc", "created_desc", "position", "book"] = "updated_desc",
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    normalized_query = q.strip() if q else None
+    if normalized_query and len(normalized_query) < 2:
+        raise HTTPException(status_code=422, detail="搜索关键词至少需要 2 个字符")
+    result = await list_notes(
+        q=normalized_query,
+        book_id=book_id,
+        tags=tag,
+        note_kind=note_kind,
+        color=color,
+        view=view,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    for item in result["items"]:
+        item["cfi_range"] = item.pop("cfi", "")
+    return result
 
 
 @app.get("/api/materials")
