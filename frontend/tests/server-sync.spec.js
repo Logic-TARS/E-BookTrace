@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
-import { installNotesApiRoutes, makeNote } from './helpers/notes-management.mjs';
+import { installNotesApiRoutes, makeNote, readSyncQueue } from './helpers/notes-management.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -156,6 +156,7 @@ test.describe('server library sync', () => {
     await page.waitForTimeout(1800);
     expect(state.syncRequests[0].protocol_version).toBe(2);
     expect(state.syncRequests[0].operations[0]).toMatchObject({ type: 'highlight.trash', entity_id: 'client-note-1', payload: { deleted_at: '2026-09-21T00:00:00Z' } });
+    await expect.poll(async () => readSyncQueue(page)).toEqual([]);
   });
 
   test('trash and restore are visible through notes management UI on two devices', async ({ browser }) => {

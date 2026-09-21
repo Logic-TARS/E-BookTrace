@@ -4755,6 +4755,7 @@
   async function applyNotesBatch(type, payload = {}) {
     const notes = selectedNotes();
     if (!notes.length) return false;
+    if (!notes.every(note => note.book_id)) throw new Error('该历史记录需联网后操作');
     if (navigator.onLine) {
       const ids = notes.map(note => note.server_id || note.id);
       const endpoint = type === 'tags' ? 'tags' : type;
@@ -4807,6 +4808,7 @@
     const value = await showNotesConfirm(labels[type], { tags: isTag, danger, confirmLabel: isTag ? '确认添加' : (type === 'trash' ? '确认移入' : (type === 'delete' ? '确认永久删除' : '确认')) });
     if (value === null || (isTag && value.length === 0)) return;
     try {
+      if (!chosenNotes.every(note => note.book_id) && !navigator.onLine) throw new Error('该历史记录需联网后操作');
       if (type === 'trash') lastTrashedNotes = chosenNotes;
       await applyNotesBatch(type, isTag ? { action: 'add', tags: value } : {});
       if (type === 'trash') {

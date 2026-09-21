@@ -592,6 +592,27 @@ test.describe('notes management shell', () => {
     expect((await readNotesIndexedDb(page))[0].deleted_at).toBeNull();
   });
 
+  test('mixed offline selection with legacy note fails atomically before local writes', async ({ page }) => {
+    const normal = makeNote({ id: 'normal-note', client_id: 'normal-client', server_id: 'normal-server', highlight_text: '正常划线' });
+    const legacy = makeNote({ id: 'legacy-note', client_id: 'legacy-client', server_id: 'legacy-server', book_id: null, highlight_text: '历史划线' });
+    await installNotesApiRoutes(page, { notes: [normal, legacy] });
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [normal, legacy] });
+    await page.reload();
+    await expect(page.getByText('历史划线')).toBeVisible();
+    await page.context().setOffline(true);
+    await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: false }));
+    await page.getByLabel('选择 正常划线').check();
+    await page.getByLabel('选择 历史划线').check();
+    await page.getByRole('button', { name: '移入回收站' }).click();
+    await page.getByRole('button', { name: '确认移入' }).click();
+    await expect(page.getByText('批量操作失败，请重试')).toBeVisible();
+    const local = await readNotesIndexedDb(page);
+    expect(local.find(note => note.id === normal.id).deleted_at).toBeNull();
+    expect(local.find(note => note.id === legacy.id).deleted_at).toBeNull();
+    expect(await readSyncQueue(page)).toEqual([]);
+  });
+
   test('offline trash queues protocol v2 operations by book and undo updates local state', async ({ page }) => {
     const note = makeNote({ server_id: 'server-note-1' });
     await installNotesApiRoutes(page, { notes: [note] });
