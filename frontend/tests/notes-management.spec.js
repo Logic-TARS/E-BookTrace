@@ -605,6 +605,27 @@ test.describe('notes management shell', () => {
     expect(state.batchRequests[0].tags).toEqual(['联网整理']);
   });
 
+  test('online batch fetch failure with legacy selection has no local side effects', async ({ page }) => {
+    const normal = makeNote({ id: 'fetch-normal', client_id: 'fetch-normal-client', server_id: 'fetch-normal-server', highlight_text: '失败正常划线' });
+    const legacy = makeNote({ id: 'fetch-legacy', client_id: 'fetch-legacy-client', server_id: 'fetch-legacy-server', book_id: null, highlight_text: '失败历史划线' });
+    await installNotesApiRoutes(page, { notes: [normal, legacy] });
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [normal, legacy] });
+    await page.reload();
+    await expect(page.getByText('失败历史划线')).toBeVisible();
+    await page.route('**/api/notes/batch/tags', route => route.abort('failed'));
+    await page.getByLabel('选择 失败正常划线').check();
+    await page.getByLabel('选择 失败历史划线').check();
+    await page.getByRole('button', { name: '添加标签' }).click();
+    await page.getByLabel('批量标签').fill('失败测试');
+    await page.getByRole('button', { name: '确认添加' }).click();
+    await expect(page.getByText('批量操作失败，请重试')).toBeVisible();
+    const local = await readNotesIndexedDb(page);
+    expect(local.find(note => note.id === normal.id).tags).toEqual(['阅读']);
+    expect(local.find(note => note.id === legacy.id).tags).toEqual(['阅读']);
+    expect(await readSyncQueue(page)).toEqual([]);
+  });
+
   test('mixed offline selection with legacy note fails atomically before local writes', async ({ page }) => {
     const normal = makeNote({ id: 'normal-note', client_id: 'normal-client', server_id: 'normal-server', highlight_text: '正常划线' });
     const legacy = makeNote({ id: 'legacy-note', client_id: 'legacy-client', server_id: 'legacy-server', book_id: null, highlight_text: '历史划线' });

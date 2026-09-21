@@ -4778,8 +4778,9 @@
           note.synced = true;
         });
       } catch (error) {
-        if (navigator.onLine && error?.name !== 'TypeError' && error?.message !== 'Failed to fetch') {
+        if (navigator.onLine) {
           await loadNotesManagement();
+          if (!notes.every(note => note.book_id)) throw new Error('该历史记录需联网后操作');
           throw error;
         }
         for (const note of notes) {
