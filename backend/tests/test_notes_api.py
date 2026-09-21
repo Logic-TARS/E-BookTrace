@@ -799,6 +799,31 @@ def test_sync_protocol_v2_delete_conflicts_for_active_exact_id_without_touching_
     }
 
 
+def test_legacy_sync_delete_only_removes_exact_id_on_cross_field_collision(
+    client, notes_db, uploaded_book
+):
+    _seed_cross_field_collision(notes_db, uploaded_book["id"])
+
+    response = client.post(
+        f"/api/books/{uploaded_book['id']}/sync",
+        json={
+            "operations": [
+                {
+                    "op_id": "legacy-delete-cross-field-collision",
+                    "type": "highlight.delete",
+                    "entity_id": "collision-key",
+                    "payload": {},
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["highlights"]] == [
+        "client-target-id"
+    ]
+
+
 def test_legacy_sync_delete_remains_permanent(client, uploaded_book, synced_note):
     response = client.post(
         f"/api/books/{uploaded_book['id']}/sync",

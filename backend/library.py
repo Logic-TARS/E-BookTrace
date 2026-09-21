@@ -489,11 +489,7 @@ async def sync_book_state(
                 if protocol_version is not None and protocol_version >= 2:
                     await _delete_trashed_synced_highlight(db, book_id, entity_id)
                 else:
-                    await db.execute(
-                        "DELETE FROM highlights WHERE book_id = ? "
-                        "AND (id = ? OR client_id = ?)",
-                        (book_id, entity_id, entity_id),
-                    )
+                    await _delete_synced_highlight(db, book_id, entity_id)
             await db.execute(
                 "INSERT INTO reader_sync_operations "
                 "(op_id, book_id, operation_type, received_at) VALUES (?, ?, ?, ?)",
@@ -609,6 +605,16 @@ async def _restore_synced_highlight(
             "UPDATE highlights SET deleted_at = NULL, updated_at = ? WHERE id = ?",
             (now, target["id"]),
         )
+
+
+async def _delete_synced_highlight(
+    db: aiosqlite.Connection,
+    book_id: str,
+    entity_id: str,
+) -> None:
+    target = await _resolve_synced_highlight_id(db, book_id, entity_id)
+    if target:
+        await db.execute("DELETE FROM highlights WHERE id = ?", (target["id"],))
 
 
 async def _delete_trashed_synced_highlight(

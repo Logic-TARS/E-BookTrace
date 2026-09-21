@@ -65,3 +65,15 @@
   - `python -m pytest backend/tests/test_api.py -k "cross_device_state_sync_is_idempotent or delete_removes_file_and_reader_state" -q`
     - 最终复跑：`2 passed, 37 deselected, 1 warning in 1.05s`
 - 本轮只修改同步实体解析、对应协议测试和本报告；旧协议 delete、整书删除及其他同步语义未改。
+
+## 修复轮 2/5：旧协议永久删除单目标解析
+
+- 修复 remaining finding：无 `protocol_version` 的 `highlight.delete` 不再直接用 `(id = ? OR client_id = ?)` 删除所有匹配记录。
+- legacy delete 复用 `_resolve_synced_highlight_id()` 的“精确 `id` 优先，其次 `client_id`”规则，再由 `_delete_synced_highlight()` 只按解析出的主键永久删除一条；仍不检查 `deleted_at`，保持旧协议无条件永久删除语义。
+- 严格 TDD：先新增 legacy 跨字段碰撞测试；RED 为 `1 failed, 28 deselected, 1 warning in 0.80s`，旧实现错误删除两条；最小修复后 GREEN 为 `1 passed, 28 deselected, 1 warning in 0.67s`。
+- 修复轮验证命令与精确结果：
+  - `python -m pytest backend/tests/test_notes_api.py -k "sync_protocol or legacy_sync" -q`
+    - 最终复跑：`12 passed, 17 deselected, 1 warning in 2.47s`
+  - `python -m pytest backend/tests/test_api.py -k "cross_device_state_sync_is_idempotent or delete_removes_file_and_reader_state" -q`
+    - 最终复跑：`2 passed, 37 deselected, 1 warning in 1.04s`
+- 本轮只修改 legacy `highlight.delete` 的目标解析、对应测试和本报告；v2 状态机及整书删除未改。
