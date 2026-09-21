@@ -48,6 +48,8 @@ test.describe('notes management shell', () => {
     expect(params.get('tag')).toBe('阅读');
     expect(params.get('note_kind')).toBe('reflected');
     expect(params.get('color')).toBe('yellow');
+    expect(params.has('sort')).toBe(false);
+    expect(params.has('view')).toBe(false);
     expect(params.has('limit')).toBe(false);
     expect(params.has('offset')).toBe(false);
   });

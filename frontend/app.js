@@ -1551,8 +1551,9 @@
           detail: '正在打开第一页；服务器上传会在后台继续',
           progress: 60,
         });
+        const uploadPromise = uploadLocalBookInBackground(localRecord, e.target.result);
         await openBook(localRecord, { skipSync: true });
-        uploadLocalBookInBackground(localRecord, e.target.result).catch(() => {});
+        uploadPromise.catch(() => {});
       } catch (err) {
         console.error('Import failed:', err);
         setOperationStatus({
@@ -4971,7 +4972,14 @@
         startMarkdownDownload(renderOfflineNotesMarkdown(result.items), filename);
         return;
       }
-      const response = await fetchWithTimeout(API_BASE + '/api/notes/export.md?' + buildNotesQueryParams(notesQuery, { includePaging: false }));
+      const exportQuery = {
+        q: notesQuery.q,
+        bookId: notesQuery.bookId,
+        tags: notesQuery.tags,
+        noteKind: notesQuery.noteKind,
+        color: notesQuery.color,
+      };
+      const response = await fetchWithTimeout(API_BASE + '/api/notes/export.md?' + buildNotesQueryParams(exportQuery, { includePaging: false }));
       if (!response.ok) throw new Error(`Server responded with ${response.status}`);
       const content = await response.text();
       const disposition = response.headers.get('content-disposition') || '';
