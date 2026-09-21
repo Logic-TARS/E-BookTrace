@@ -144,11 +144,16 @@ test.describe('server library sync', () => {
     await page.context().setOffline(true);
     await page.evaluate(async note => {
       const db = await new Promise((resolve, reject) => { const request = indexedDB.open('marginalia', 6); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
-      const transaction = db.transaction(['books', 'highlights', 'sync_queue'], 'readwrite');
-      transaction.objectStore('books').put({ id: 'book-1', server_book_id: 'book-1', source: 'server', book_title: '测试书' });
-      transaction.objectStore('highlights').put(note);
-      transaction.objectStore('sync_queue').put({ id: 'highlight.trash:book-1:client-note-1', op_id: 'offline-trash-op', book_id: 'book-1', type: 'highlight.trash', entity_id: note.client_id, payload: { deleted_at: '2026-09-21T00:00:00Z' } });
-      transaction.oncomplete = () => { db.close(); };
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction(['books', 'highlights', 'sync_queue'], 'readwrite');
+        transaction.objectStore('books').put({ id: 'book-1', server_book_id: 'book-1', source: 'server', book_title: '测试书' });
+        transaction.objectStore('highlights').put(note);
+        transaction.objectStore('sync_queue').put({ id: 'highlight.trash:book-1:client-note-1', op_id: 'offline-trash-op', book_id: 'book-1', type: 'highlight.trash', entity_id: note.client_id, payload: { deleted_at: '2026-09-21T00:00:00Z' } });
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      db.close();
     }, note);
     await page.context().setOffline(false);
     await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: true }));

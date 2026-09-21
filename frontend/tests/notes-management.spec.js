@@ -592,6 +592,19 @@ test.describe('notes management shell', () => {
     expect((await readNotesIndexedDb(page))[0].deleted_at).toBeNull();
   });
 
+  test('online batch accepts a legacy note with a server identity', async ({ page }) => {
+    const legacy = makeNote({ book_id: null, server_id: 'legacy-server', highlight_text: '联网历史划线' });
+    const state = { notes: [legacy], batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await page.getByLabel('选择 联网历史划线').check();
+    await page.getByRole('button', { name: '添加标签' }).click();
+    await page.getByLabel('批量标签').fill('联网整理');
+    await page.getByRole('button', { name: '确认添加' }).click();
+    expect(state.batchRequests[0].ids).toEqual(['legacy-server']);
+    expect(state.batchRequests[0].tags).toEqual(['联网整理']);
+  });
+
   test('mixed offline selection with legacy note fails atomically before local writes', async ({ page }) => {
     const normal = makeNote({ id: 'normal-note', client_id: 'normal-client', server_id: 'normal-server', highlight_text: '正常划线' });
     const legacy = makeNote({ id: 'legacy-note', client_id: 'legacy-client', server_id: 'legacy-server', book_id: null, highlight_text: '历史划线' });

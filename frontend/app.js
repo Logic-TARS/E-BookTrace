@@ -4755,7 +4755,6 @@
   async function applyNotesBatch(type, payload = {}) {
     const notes = selectedNotes();
     if (!notes.length) return false;
-    if (!notes.every(note => note.book_id)) throw new Error('该历史记录需联网后操作');
     if (navigator.onLine) {
       const ids = notes.map(note => note.server_id || note.id);
       const endpoint = type === 'tags' ? 'tags' : type;
@@ -4788,6 +4787,7 @@
         }
       }
     } else {
+      if (!notes.every(note => note.book_id)) throw new Error('该历史记录需联网后操作');
       for (const note of notes) {
         await applyLocalNoteOperation(note, `highlight.${type === 'delete' ? 'delete' : type}`, type === 'trash' ? { deleted_at: new Date().toISOString() } : payload);
       }
