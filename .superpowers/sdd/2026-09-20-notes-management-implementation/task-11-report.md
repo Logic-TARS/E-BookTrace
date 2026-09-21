@@ -2,7 +2,7 @@
 
 ## 状态
 
-最终统一修复波次已实现，待提交。本轮修正排序、颜色与 facets 契约，补齐在线 batch 的 IndexedDB 持久更新、pending trash/restore 视图语义和所有 identity aliases 清理。
+最终统一修复波次已实现并提交于 `4b9f0ec`。本轮修正排序、颜色与 facets 契约，补齐在线 batch 的 IndexedDB 持久更新、pending trash/restore 视图语义和所有 identity aliases 清理。
 
 ## 实现摘要
 
@@ -19,9 +19,10 @@
 
 通过：
 
-- `cd frontend && npm test -- tests/notes-management.spec.js`：41 passed。
+- `cd frontend && npm test -- tests/notes-management.spec.js`：42 passed（含本轮 alias 场景）。
 - `cd frontend && npm test -- tests/server-sync.spec.js`：4 passed。
 - `cd frontend && npm test -- tests/mobile-layout.spec.js --project=mobile-chromium`：12 passed。
+- `git diff --check`：通过。
 - `cd frontend && npm test -- tests/import-ux.spec.js --grep "failed upload|slow server upload"`：2 passed。
 - `G:/Job/Marginalia/.venv/Scripts/python.exe -m pytest backend/tests`：179 passed，21 个既有 aiosqlite/event-loop 警告。
 - `cd frontend && npm test`：70 passed，1 个既有 AI citation 跳转测试失败（静态服务器收到 sync 501 后仍停留 Chapter 1），与本波次改动无关；不得宣称全套通过。
@@ -52,7 +53,7 @@
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
 - `git diff --check`：通过。
 - `git status --short --branch`：`## notes-management-implementation`（干净）。
-- 本轮 commit：待提交；最终哈希以交付回复为准。
+- 本轮最终 commit：`4b9f0ec`。
 
 ## 额外说明
 

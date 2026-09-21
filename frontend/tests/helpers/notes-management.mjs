@@ -233,7 +233,7 @@ export async function installNotesApiRoutes(page, state = {}) {
         operation_id: body.operation_id,
         affected: ids.size,
         unchanged: 0,
-        items: state.notes.filter(note => ids.has(note.id)).map(note => ({ id: note.id, client_id: note.client_id })),
+        items: state.notes.filter(matches).map(note => ({ id: note.id, client_id: note.client_id })),
       } });
       return;
     }

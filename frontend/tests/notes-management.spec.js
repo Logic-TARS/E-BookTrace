@@ -240,6 +240,43 @@ test.describe('notes management shell', () => {
     await expect(page.getByText('服务器旧值')).toHaveCount(0);
   });
 
+  test('online batch aliases update one local cache record and clear its queue for offline reads', async ({ page }) => {
+    const local = makeNote({ id: 'local-key', client_id: 'client-key', server_id: null, synced: false, tags: ['阅读'] });
+    const server = makeNote({ id: 'server-key', client_id: 'client-key', server_id: 'server-key', tags: ['阅读'] });
+    const state = { notes: [server], batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, {
+      highlights: [local],
+      operations: [{
+        id: 'highlight.upsert:book-1:local-key', op_id: 'pending-local', book_id: 'book-1',
+        type: 'highlight.upsert', entity_id: 'local-key', payload: local,
+      }],
+    });
+    await page.reload();
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '添加标签' }).click();
+    await page.getByLabel('批量标签').fill('在线别名验证');
+    await page.getByRole('button', { name: '确认添加' }).click();
+
+    await expect.poll(async () => {
+      const records = await readNotesIndexedDb(page);
+      return records.filter(note => ['local-key', 'server-key', 'client-key'].includes(note.id)).length;
+    }).toBe(1);
+    const records = await readNotesIndexedDb(page);
+    expect(records[0].id).toBe('local-key');
+    expect(records.find(note => note.id === 'local-key').tags).toContain('在线别名验证');
+    expect(records.find(note => note.id === 'local-key').synced).toBe(true);
+    expect(await readSyncQueue(page)).toHaveLength(0);
+
+    await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: false }));
+    await page.route('**/api/notes**', route => route.abort('failed'));
+    await page.reload();
+    await expect(page.getByText('测试划线')).toHaveCount(1);
+    await expect(page.locator('#notes-tag-filter')).toHaveValue('');
+    await expect(page.locator('#notes-tag-filter option[value="在线别名验证"]')).toHaveCount(1);
+  });
+
   test('initial API failure falls back to IndexedDB with incomplete warning', async ({ page }) => {
     await page.goto('/#/creation');
     await seedNotesIndexedDb(page, { highlights: [makeNote({ synced: false })] });

@@ -4817,20 +4817,37 @@
               .map(String).some(alias => deletedKeys.has(alias));
           }).map(operation => dbDelete('sync_queue', operation.id)));
         }
+        const batchItems = Array.isArray(result.items) ? result.items : [];
+        const [allHighlights, allQueued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
         for (const note of notes) {
-          const updated = { ...note };
-          if (type === 'trash') updated.deleted_at = result.deleted_at || new Date().toISOString();
+          const responseItem = batchItems.find(item => (
+            item.id === note.id || item.id === note.server_id || item.client_id === note.client_id ||
+            getNoteAliases(item).some(alias => getNoteAliases(note).includes(alias))
+          )) || batchItems[notes.indexOf(note)];
+          const aliases = new Set([...getNoteAliases(note), ...getNoteAliases(responseItem || {})]);
+          const matchesIdentity = item => getNoteAliases(item).some(alias => aliases.has(alias));
+          const matchingHighlights = allHighlights.filter(matchesIdentity);
+          const updated = { ...note, ...(responseItem || {}) };
+          if (type === 'trash') updated.deleted_at = result.deleted_at || updated.deleted_at || new Date().toISOString();
           if (type === 'restore') updated.deleted_at = null;
           if (type === 'tags') updated.tags = payload.action === 'add'
             ? [...new Set([...(updated.tags || []), ...payload.tags])]
             : (updated.tags || []).filter(tag => !payload.tags.includes(tag));
+          updated.id = matchingHighlights[0]?.id || note.id;
+          updated.server_id = responseItem?.id || note.server_id || note.id;
+          updated.client_id = responseItem?.client_id || note.client_id || note.id;
           updated.synced = true;
           if (type === 'delete') {
-            const localHighlights = await dbGetAllSafe('highlights');
-            await dbDeleteMany('highlights', localHighlights.filter(item => getNoteAliases(item).some(alias => getNoteAliases(note).includes(alias))).map(item => item.id));
+            await dbDeleteMany('highlights', matchingHighlights.map(item => item.id));
           } else {
+            await dbDeleteMany('highlights', matchingHighlights.filter(item => item.id !== updated.id).map(item => item.id));
             await dbPut('highlights', updated);
           }
+          await Promise.all(allQueued.filter(operation => {
+            const operationPayload = operation.payload || {};
+            return [operation.entity_id, operationPayload.id, operationPayload.server_id, operationPayload.client_id]
+              .filter(Boolean).map(String).some(alias => aliases.has(alias));
+          }).map(operation => dbDelete('sync_queue', operation.id)));
         }
       } catch (error) {
         if (navigator.onLine) {
