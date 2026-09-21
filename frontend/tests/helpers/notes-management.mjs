@@ -138,6 +138,7 @@ export async function installNotesApiRoutes(page, state = {}) {
   state.notes ??= [];
   state.requests ??= [];
   state.batchRequests ??= [];
+  state.syncRequests ??= [];
   await page.route('**/api/**', async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -155,6 +156,12 @@ export async function installNotesApiRoutes(page, state = {}) {
 
     if (url.pathname === '/api/books' && method === 'GET') {
       await route.fulfill({ json: { books: state.books } });
+      return;
+    }
+
+    if (/^\/api\/books\/[^/]+\/sync$/.test(url.pathname) && method === 'POST') {
+      state.syncRequests.push(body);
+      await route.fulfill({ json: { book_id: decodeURIComponent(url.pathname.split('/')[3]), revision: 1, progress: null, bookmarks: [], highlights: state.notes } });
       return;
     }
 
@@ -203,6 +210,11 @@ export async function installNotesApiRoutes(page, state = {}) {
       const type = url.pathname.split('/').at(-1);
       const request = { type, ...body };
       state.batchRequests.push(request);
+      if (state.failBatchType === type) {
+        state.failBatchType = null;
+        await route.fulfill({ status: 500, json: { detail: 'forced batch failure' } });
+        return;
+      }
       const ids = new Set(body.ids || []);
       const matches = note => ids.has(note.id) || ids.has(note.server_id) || ids.has(note.client_id);
       if (type === 'trash') state.notes.forEach(note => { if (matches(note)) note.deleted_at = new Date().toISOString(); });

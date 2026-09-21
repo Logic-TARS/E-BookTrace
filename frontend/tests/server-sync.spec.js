@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'fs';
+import { installNotesApiRoutes, makeNote } from './helpers/notes-management.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -130,6 +131,56 @@ test.describe('server library sync', () => {
     await expect(pageB.locator('#toolbar-book-title')).toContainText('Multichapter');
     await expect(pageB.locator('#bookmarks-count')).toHaveText('1');
 
+    await contextA.close();
+    await contextB.close();
+  });
+
+  test('offline trash is consumed by real sync after reconnect', async ({ page }) => {
+    const note = makeNote({ server_id: 'server-note-1' });
+    const state = { notes: [note], syncRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await page.evaluate(async () => { Object.defineProperty(navigator, 'onLine', { configurable: true, value: false }); });
+    await page.context().setOffline(true);
+    await page.evaluate(async note => {
+      const db = await new Promise((resolve, reject) => { const request = indexedDB.open('marginalia', 6); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      const transaction = db.transaction(['books', 'highlights', 'sync_queue'], 'readwrite');
+      transaction.objectStore('books').put({ id: 'book-1', server_book_id: 'book-1', source: 'server', book_title: '测试书' });
+      transaction.objectStore('highlights').put(note);
+      transaction.objectStore('sync_queue').put({ id: 'highlight.trash:book-1:client-note-1', op_id: 'offline-trash-op', book_id: 'book-1', type: 'highlight.trash', entity_id: note.client_id, payload: { deleted_at: '2026-09-21T00:00:00Z' } });
+      transaction.oncomplete = () => { db.close(); };
+    }, note);
+    await page.context().setOffline(false);
+    await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: true }));
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await page.waitForTimeout(1800);
+    expect(state.syncRequests[0].protocol_version).toBe(2);
+    expect(state.syncRequests[0].operations[0]).toMatchObject({ type: 'highlight.trash', entity_id: 'client-note-1', payload: { deleted_at: '2026-09-21T00:00:00Z' } });
+  });
+
+  test('trash and restore are visible through notes management UI on two devices', async ({ browser }) => {
+    const note = makeNote({ server_id: 'server-ui-note' });
+    const state = { notes: [note], batchRequests: [] };
+    const contextA = await browser.newContext({ serviceWorkers: 'block' });
+    const pageA = await contextA.newPage();
+    await installNotesApiRoutes(pageA, state);
+    await pageA.goto('/#/creation');
+    await pageA.getByLabel('选择 测试划线').check();
+    await pageA.getByRole('button', { name: '移入回收站' }).click();
+    await pageA.getByRole('button', { name: '确认移入' }).click();
+    const contextB = await browser.newContext({ serviceWorkers: 'block' });
+    const pageB = await contextB.newPage();
+    await installNotesApiRoutes(pageB, state);
+    await pageB.goto('/#/creation');
+    await pageB.getByRole('button', { name: '回收站', exact: true }).click();
+    await expect(pageB.getByText('测试划线')).toBeVisible();
+    await pageB.getByLabel('选择 测试划线').check();
+    await pageB.getByRole('button', { name: '恢复' }).click();
+    await expect(pageB.getByText('恢复 1 条笔记')).toBeVisible();
+    await pageB.getByRole('button', { name: '确认' }).click();
+    await pageA.reload();
+    await expect(pageA.getByText('测试划线')).toBeVisible();
+    await expect(pageA.locator('#btn-toggle-notes-trash')).toHaveAttribute('aria-pressed', 'false');
     await contextA.close();
     await contextB.close();
   });

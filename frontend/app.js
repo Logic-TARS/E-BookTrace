@@ -4734,6 +4734,7 @@
   }
 
   async function applyLocalNoteOperation(note, type, payload = {}) {
+    if (!note.book_id) throw new Error('该历史记录需联网后操作');
     const updated = { ...note };
     if (type === 'highlight.trash') updated.deleted_at = payload.deleted_at || new Date().toISOString();
     if (type === 'highlight.restore') updated.deleted_at = null;
@@ -4743,7 +4744,6 @@
       updated.synced = false;
       await dbPut('highlights', updated);
     }
-    if (!note.book_id) throw new Error('该历史记录需联网后操作');
     await dbPut('sync_queue', {
       id: `${type}:${note.book_id}:${note.client_id || note.id}`,
       op_id: uuid(), book_id: note.book_id, type,
@@ -4766,7 +4766,9 @@
         });
         if (!response.ok) throw new Error(`Server responded with ${response.status}`);
         const result = await response.json();
-        if (Number(result.affected || 0) < 0) throw new Error('Invalid batch result');
+        const affected = Number(result.affected || 0);
+        const unchanged = Number(result.unchanged || 0);
+        if (affected <= 0 || affected + unchanged < notes.length) throw new Error('Batch operation affected no notes');
         notes.forEach(note => {
         if (type === 'trash') note.deleted_at = result.deleted_at || new Date().toISOString();
         if (type === 'restore') note.deleted_at = null;
@@ -4776,7 +4778,10 @@
           note.synced = true;
         });
       } catch (error) {
-        if (navigator.onLine && error?.name !== 'TypeError' && error?.message !== 'Failed to fetch') throw error;
+        if (navigator.onLine && error?.name !== 'TypeError' && error?.message !== 'Failed to fetch') {
+          await loadNotesManagement();
+          throw error;
+        }
         for (const note of notes) {
           await applyLocalNoteOperation(note, `highlight.${type === 'delete' ? 'delete' : type}`, type === 'trash' ? { deleted_at: new Date().toISOString() } : payload);
         }
@@ -4832,7 +4837,10 @@
         };
         dom.toast.appendChild(undo); dom.toast.hidden = false;
       }
-    } catch (error) { showToast('批量操作失败，请重试', 'error'); }
+    } catch (error) {
+      await loadNotesManagement();
+      showToast('批量操作失败，请重试', 'error');
+    }
   }
 
   async function loadNotesManagement({ preserveDetail = false } = {}) {

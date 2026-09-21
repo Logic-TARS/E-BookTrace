@@ -564,6 +564,34 @@ test.describe('notes management shell', () => {
     expect(state.batchRequests.at(-1).type).toBe('delete');
   });
 
+  test('failed batch refreshes server state and preserves selection for retry', async ({ page }) => {
+    const note = makeNote();
+    const state = { notes: [note], failBatchType: 'trash', batchRequests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '移入回收站' }).click();
+    await page.getByRole('button', { name: '确认移入' }).click();
+    await expect(page.getByText('批量操作失败，请重试')).toBeVisible();
+    await expect(page.getByText('已选择 1 条')).toBeVisible();
+    expect(state.notes[0].deleted_at).toBeNull();
+  });
+
+  test('legacy offline note is not changed before book validation', async ({ page }) => {
+    const legacy = makeNote({ book_id: null });
+    await installNotesApiRoutes(page, { notes: [legacy] });
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [legacy] });
+    await page.reload();
+    await page.context().setOffline(true);
+    await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: false }));
+    await page.getByLabel('选择 测试划线').check();
+    await page.getByRole('button', { name: '移入回收站' }).click();
+    await page.getByRole('button', { name: '确认移入' }).click();
+    await expect(page.getByText('批量操作失败，请重试')).toBeVisible();
+    expect((await readNotesIndexedDb(page))[0].deleted_at).toBeNull();
+  });
+
   test('offline trash queues protocol v2 operations by book and undo updates local state', async ({ page }) => {
     const note = makeNote({ server_id: 'server-note-1' });
     await installNotesApiRoutes(page, { notes: [note] });
