@@ -92,6 +92,10 @@
   let notesSearchTimer = null;
   let notesFacets = null;
   const notesSelection = new Set();
+  let managedNoteDraft = null;
+  let managedNoteOriginal = null;
+  let managedNoteUndo = null;
+  let managedNoteUndoTimer = null;
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -194,6 +198,8 @@
     notesNext: $('#btn-notes-next'),
     notesPageStatus: $('#notes-page-status'),
     notesLiveStatus: $('#notes-live-status'),
+    notesDetailPane: $('#notes-detail-pane'),
+    notesUnsavedDialog: $('#notes-unsaved-dialog'),
     notesSelectPage: $('#notes-select-page'),
     btnNotesTrash: $('#btn-toggle-notes-trash'),
     btnClearNoteFilters: $('#btn-clear-note-filters'),
@@ -4530,15 +4536,115 @@
     fill(dom.notesColorFilter, facets.colors, 'value', 'label');
   }
 
+  function normalizeTagsInput(value) {
+    const seen = new Set();
+    return String(value || '').split(/[,，]/).map(tag => tag.trim()).filter(tag => tag && !seen.has(tag) && seen.add(tag));
+  }
+
+  function createManagedNoteDraft(note) {
+    return { ...note, note: note.note || '', tags: [...(note.tags || [])], color: note.color || 'yellow' };
+  }
+
+  function isManagedNoteDraftDirty() {
+    if (!managedNoteDraft || !managedNoteOriginal) return false;
+    return managedNoteDraft.note !== managedNoteOriginal.note
+      || managedNoteDraft.color !== managedNoteOriginal.color
+      || JSON.stringify(managedNoteDraft.tags || []) !== JSON.stringify(managedNoteOriginal.tags || []);
+  }
+
+  function renderManagedNoteDetail() {
+    const note = managedNoteDraft;
+    if (!note || !dom.notesDetailPane) return;
+    dom.notesDetailPane.innerHTML = `
+      <div class="notes-detail-content">
+        <div class="notes-detail-heading"><h2>笔记详情</h2><button class="btn btn-ghost btn-sm" id="btn-close-managed-note" type="button">关闭</button></div>
+        <label>划线原文<textarea aria-label="划线原文" readonly>${escapeHTML(note.highlight_text || '')}</textarea></label>
+        <label>书名<input readonly value="${escapeHTML(note.book_title || '')}"></label>
+        <label>作者<input readonly value="${escapeHTML(note.book_author || '')}"></label>
+        <label>章节<input readonly value="${escapeHTML(note.chapter || '')}"></label>
+        <label>感悟<textarea id="managed-note-text" aria-label="感悟">${escapeHTML(note.note || '')}</textarea></label>
+        <label>标签<input id="managed-note-tags" aria-label="标签" value="${escapeHTML((note.tags || []).join(', '))}"></label>
+        <label>高亮颜色<select id="managed-note-color" aria-label="高亮颜色"><option value="yellow">黄色</option><option value="green">绿色</option><option value="blue">蓝色</option><option value="pink">粉色</option></select></label>
+        <div class="notes-detail-actions"><button class="btn btn-danger" id="btn-delete-managed-reflection" type="button" ${note.note ? '' : 'disabled'}>删除感悟</button><button class="btn btn-primary" id="btn-save-managed-note" type="button">保存笔记</button></div>
+      </div>`;
+    $('#managed-note-color').value = note.color;
+    $('#managed-note-text').addEventListener('input', e => { managedNoteDraft.note = e.target.value; });
+    $('#managed-note-tags').addEventListener('input', e => { managedNoteDraft.tags = normalizeTagsInput(e.target.value); });
+    $('#managed-note-color').addEventListener('change', e => { managedNoteDraft.color = e.target.value; });
+    $('#btn-save-managed-note').addEventListener('click', saveManagedNoteDraft);
+    $('#btn-delete-managed-reflection').addEventListener('click', deleteManagedNoteReflection);
+    $('#btn-close-managed-note').addEventListener('click', () => requestNotesNavigation(() => closeManagedNote()));
+  }
+
+  function closeManagedNote() {
+    managedNoteDraft = null;
+    managedNoteOriginal = null;
+    if (dom.notesDetailPane) dom.notesDetailPane.innerHTML = '<div class="empty-state"><p>选择一条笔记查看详情</p></div>';
+  }
+
+  async function openManagedNote(note) {
+    managedNoteOriginal = createManagedNoteDraft(note);
+    managedNoteDraft = createManagedNoteDraft(note);
+    renderManagedNoteDetail();
+  }
+
+  async function saveManagedNoteDraft() {
+    if (!managedNoteDraft) return false;
+    const updated = { ...managedNoteDraft, tags: normalizeTagsInput((managedNoteDraft.tags || []).join(',')), synced: false, updated_at: new Date().toISOString(), status: managedNoteDraft.note ? 'reflected' : 'raw' };
+    try {
+      await dbPut('highlights', updated);
+      if (updated.book_id) await queueReaderSync(updated.book_id, 'highlight.upsert', updated.id, updated);
+      managedNoteDraft = createManagedNoteDraft(updated);
+      managedNoteOriginal = createManagedNoteDraft(updated);
+      const index = notesItems.findIndex(item => item.id === updated.id);
+      if (index >= 0) notesItems[index] = { ...notesItems[index], ...updated };
+      renderManagedNoteDetail();
+      renderNotesManagement(notesItems);
+      updateSyncBadge();
+      showToast('笔记已保存', 'success');
+      return true;
+    } catch (error) {
+      showToast('保存失败，请重试', 'error');
+      return false;
+    }
+  }
+
+  function requestNotesNavigation(action) {
+    if (!isManagedNoteDraftDirty()) return Promise.resolve(action());
+    dom.notesUnsavedDialog.hidden = false;
+    const buttons = dom.notesUnsavedDialog.querySelectorAll('button');
+    return new Promise(resolve => {
+      buttons[0].onclick = () => { dom.notesUnsavedDialog.hidden = true; resolve(false); };
+      buttons[1].onclick = () => { dom.notesUnsavedDialog.hidden = true; closeManagedNote(); resolve(action()); };
+      buttons[2].onclick = async () => { if (await saveManagedNoteDraft()) { dom.notesUnsavedDialog.hidden = true; resolve(action()); } };
+    });
+  }
+
+  async function deleteManagedNoteReflection() {
+    if (!managedNoteDraft) return;
+    managedNoteUndo = createManagedNoteDraft(managedNoteDraft);
+    managedNoteDraft.note = '';
+    await saveManagedNoteDraft();
+    showToast('感悟已删除', 'success');
+    const toastButton = document.createElement('button');
+    toastButton.type = 'button'; toastButton.textContent = '撤销'; toastButton.className = 'btn btn-ghost btn-sm';
+    toastButton.onclick = async () => { if (managedNoteUndo) { managedNoteDraft = createManagedNoteDraft(managedNoteUndo); await saveManagedNoteDraft(); managedNoteUndo = null; } };
+    dom.toast.appendChild(toastButton);
+    if (managedNoteUndoTimer) clearTimeout(managedNoteUndoTimer);
+    managedNoteUndoTimer = setTimeout(() => { managedNoteUndo = null; }, 5000);
+  }
+
   function renderNotesManagement(items) {
     if (!dom.notesList) return;
     if (dom.notesSelectPage) dom.notesSelectPage.checked = false;
     dom.notesList.innerHTML = items.length ? items.map(note => `
-      <article class="note-management-card">
-        <strong>${escapeHTML(note.highlight_text || '')}</strong>
-        <p>${escapeHTML(note.note || '未写感悟')}</p>
-        ${note.synced === false ? '<span>待同步</span>' : ''}
+      <article class="note-management-card" data-note-id="${escapeHTML(note.id)}">
+        <button class="note-management-card-button" type="button"><strong>${escapeHTML(note.highlight_text || '')}</strong><p>${escapeHTML(note.note || '未写感悟')}</p>${note.synced === false ? '<span>待同步</span>' : ''}</button>
       </article>`).join('') : '<div class="empty-state notes-empty-state"><p>还没有可显示的笔记</p></div>';
+    dom.notesList.querySelectorAll('.note-management-card-button').forEach(button => button.addEventListener('click', () => {
+      const note = notesItems.find(item => item.id === button.closest('[data-note-id]').dataset.noteId);
+      requestNotesNavigation(() => openManagedNote(note));
+    }));
     if (dom.notesPageStatus) dom.notesPageStatus.textContent = `第 ${Math.floor(notesQuery.offset / notesQuery.limit) + 1} 页`;
     if (dom.notesPrevious) dom.notesPrevious.disabled = notesQuery.offset === 0;
     if (dom.notesNext) dom.notesNext.disabled = !notesHasMore;
@@ -4585,6 +4691,12 @@
       }
     }
     renderNotesManagement(notesItems);
+    if (managedNoteDraft && isManagedNoteDraftDirty()) {
+      renderManagedNoteDetail();
+    } else if (managedNoteDraft) {
+      const fresh = notesItems.find(item => item.id === managedNoteDraft.id);
+      if (fresh) openManagedNote(fresh);
+    }
     if (preserveDetail && dom.notesLiveStatus) {
       dom.notesLiveStatus.dataset.preserveDetail = 'true';
       dom.notesLiveStatus.dataset.managedNoteKey = dom.notesLiveStatus.dataset.managedNoteKey || '';
@@ -4853,9 +4965,9 @@
         showToast('请先从书库打开一本书', 'info');
       }
     });
-    dom.btnNavCreate.addEventListener('click', showCreation);
-    dom.btnLibraryCreate.addEventListener('click', showCreation);
-    dom.btnNotesBack.addEventListener('click', showLibrary);
+    dom.btnNavCreate.addEventListener('click', () => requestNotesNavigation(showCreation));
+    dom.btnLibraryCreate.addEventListener('click', () => requestNotesNavigation(showCreation));
+    dom.btnNotesBack.addEventListener('click', () => requestNotesNavigation(showLibrary));
     const notesFilterBindings = [
       [dom.notesBookFilter, 'bookId'], [dom.notesTagFilter, 'tags'],
       [dom.notesKindFilter, 'noteKind'], [dom.notesColorFilter, 'color'],
@@ -4869,12 +4981,15 @@
       if (dom.notesSearch.value.trim().length === 1) loadNotesManagement();
     });
     dom.notesPendingOnly?.addEventListener('change', () => updateNotesQuery({ dataScope: dom.notesPendingOnly.value }));
-    dom.btnNotesTrash?.addEventListener('click', () => updateNotesQuery({ view: notesQuery.view === 'trash' ? 'active' : 'trash' }));
+    dom.btnNotesTrash?.addEventListener('click', () => requestNotesNavigation(() => updateNotesQuery({ view: notesQuery.view === 'trash' ? 'active' : 'trash' })));
     dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });
     dom.notesPrevious?.addEventListener('click', () => { notesQuery.offset = Math.max(0, notesQuery.offset - notesQuery.limit); loadNotesManagement(); });
     dom.notesNext?.addEventListener('click', () => { notesQuery.offset += notesQuery.limit; loadNotesManagement(); });
-    window.addEventListener('hashchange', () => applyCurrentRoute());
-    window.addEventListener('popstate', () => applyCurrentRoute());
+    window.addEventListener('hashchange', () => requestNotesNavigation(applyCurrentRoute));
+    window.addEventListener('popstate', () => requestNotesNavigation(applyCurrentRoute));
+    window.addEventListener('beforeunload', (event) => {
+      if (isManagedNoteDraftDirty()) { event.preventDefault(); event.returnValue = ''; }
+    });
 
     // File import
     dom.fileInput.addEventListener('change', (e) => {

@@ -4,6 +4,8 @@ import {
   INDEXED_DB_VERSION,
   installNotesApiRoutes,
   makeNote,
+  readNotesIndexedDb,
+  readSyncQueue,
   seedNotesIndexedDb,
 } from './helpers/notes-management.mjs';
 
@@ -374,5 +376,56 @@ test.describe('notes management shell', () => {
     expect(databaseState.stores).toEqual(expect.arrayContaining([
       'legacy_notes', 'books', 'highlights', 'deleted_highlights', 'bookmarks', 'sync_queue',
     ]));
+  });
+
+  test('detail edits note tags and color while metadata stays read only', async ({ page }) => {
+    const note = makeNote();
+    await installNotesApiRoutes(page, { notes: [note] });
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [note] });
+    await page.reload();
+    await page.getByText('测试划线').click();
+
+    await expect(page.getByLabel('划线原文')).toHaveAttribute('readonly', '');
+    await page.getByRole('textbox', { name: '感悟' }).fill('新的感悟');
+    await page.getByRole('textbox', { name: '标签' }).fill(' 哲学，阅读, 哲学 ');
+    await page.locator('#managed-note-color').selectOption('green');
+    await page.getByRole('button', { name: '保存笔记' }).click();
+
+    const rows = await readNotesIndexedDb(page);
+    expect(rows.find(item => item.id === note.id)).toMatchObject({
+      note: '新的感悟', tags: ['哲学', '阅读'], color: 'green', synced: false,
+    });
+    const queue = await readSyncQueue(page);
+    expect(queue.some(item => item.type === 'highlight.upsert')).toBe(true);
+  });
+
+  test('switching notes protects an unsaved draft', async ({ page }) => {
+    const first = makeNote({ id: 'note-1', client_id: 'client-1', server_id: 'server-1', highlight_text: '第一条' });
+    const second = makeNote({ id: 'note-2', client_id: 'client-2', server_id: 'server-2', highlight_text: '第二条' });
+    await installNotesApiRoutes(page, { notes: [first, second] });
+    await page.goto('/#/creation');
+    await expect(page.getByText('第一条')).toBeVisible();
+    await page.getByText('第一条').click();
+    await page.getByRole('textbox', { name: '感悟' }).fill('尚未保存');
+    await page.getByText('第二条').click();
+
+    await expect(page.getByRole('dialog', { name: '未保存的修改' })).toBeVisible();
+    await page.getByRole('button', { name: '取消' }).click();
+    await expect(page.getByRole('textbox', { name: '感悟' })).toHaveValue('尚未保存');
+  });
+
+  test('deleting reflection keeps highlight and can be undone', async ({ page }) => {
+    const note = makeNote({ note: '原感悟' });
+    await installNotesApiRoutes(page, { notes: [note] });
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [note] });
+    await page.reload();
+    await page.getByText('测试划线').click();
+    await page.getByRole('button', { name: '删除感悟' }).click();
+
+    await expect(page.getByText('感悟已删除')).toBeVisible();
+    await page.getByRole('button', { name: '撤销' }).click();
+    await expect(page.getByRole('textbox', { name: '感悟' })).toHaveValue('原感悟');
   });
 });
