@@ -228,7 +228,7 @@
 
       <section class="notes-filter-row notes-shell-section" aria-label="筛选笔记">
         <label class="notes-search-field">
-          <span>搜索</span>
+          <span>搜索笔记</span>
           <input id="notes-search" type="search" placeholder="搜索划线或感悟">
         </label>
         <label>
@@ -244,11 +244,11 @@
           <select id="notes-kind-filter">
             <option value="">全部类型</option>
             <option value="highlight">仅划线</option>
-            <option value="reflection">有感悟</option>
+            <option value="reflected">有感悟</option>
           </select>
         </label>
         <label>
-          <span>颜色</span>
+          <span>高亮颜色</span>
           <select id="notes-color-filter"><option value="">全部颜色</option></select>
         </label>
         <label>
@@ -260,8 +260,11 @@
           </select>
         </label>
         <label class="notes-pending-filter">
-          <input id="notes-pending-only" type="checkbox">
-          <span>待同步视图</span>
+          <span>数据范围</span>
+          <select id="notes-pending-only">
+            <option value="all">全部数据</option>
+            <option value="pending">待同步</option>
+          </select>
         </label>
         <button class="btn btn-ghost" id="btn-clear-note-filters" type="button">清空筛选</button>
       </section>

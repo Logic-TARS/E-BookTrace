@@ -83,6 +83,13 @@
   let routeTransition = Promise.resolve();
   let pendingRoute = null;
   let pendingRouteTransition = null;
+  let notesQuery = createDefaultNotesQuery();
+  let notesItems = [];
+  let notesTotal = 0;
+  let notesHasMore = false;
+  let notesLoaded = false;
+  let notesLoadError = null;
+  let notesSearchTimer = null;
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -172,6 +179,21 @@
     btnLibraryCreate: $('#btn-library-create'),
     creationView: $('#creation-view'),
     btnNotesBack: $('#btn-notes-back'),
+    notesSearch: $('#notes-search'),
+    notesBookFilter: $('#notes-book-filter'),
+    notesTagFilter: $('#notes-tag-filter'),
+    notesKindFilter: $('#notes-kind-filter'),
+    notesColorFilter: $('#notes-color-filter'),
+    notesSort: $('#notes-sort'),
+    notesPendingOnly: $('#notes-pending-only'),
+    notesDataStatus: $('#notes-data-status'),
+    notesList: $('#notes-management-list'),
+    notesPrevious: $('#btn-notes-previous'),
+    notesNext: $('#btn-notes-next'),
+    notesPageStatus: $('#notes-page-status'),
+    notesLiveStatus: $('#notes-live-status'),
+    btnNotesTrash: $('#btn-toggle-notes-trash'),
+    btnClearNoteFilters: $('#btn-clear-note-filters'),
     bookDeleteModal: $('#book-delete-modal'),
     bookDeleteMessage: $('#book-delete-message'),
     btnCancelBookDelete: $('#btn-cancel-book-delete'),
@@ -536,6 +558,9 @@
       renderRoute(route);
       if (route === '/') {
         await renderLibrary();
+      }
+      if (route === '/creation') {
+        await loadNotesManagement();
       }
       if (requestedRoute !== route) history.replaceState({}, '', '#/');
       currentRoute = route;
@@ -3861,7 +3886,8 @@
     if (!currentBookMeta) return;
     await renderBookmarks();
 
-    const highlights = await dbGetByIndex('highlights', 'by_book', currentBookMeta.id);
+    const highlights = (await dbGetByIndex('highlights', 'by_book', currentBookMeta.id))
+      .filter(highlight => !highlight.deleted_at);
     // Sort by progress (reading order)
     highlights.sort((a, b) => a.progress_percent - b.progress_percent);
 
@@ -4353,6 +4379,135 @@
     }
   }
 
+  // ==================== NOTES MANAGEMENT ====================
+  function createDefaultNotesQuery() {
+    return {
+      q: '', bookId: '', tags: [], noteKind: 'all', color: '', view: 'active',
+      sort: 'updated_desc', dataScope: 'all', limit: 50, offset: 0,
+    };
+  }
+
+  function buildNotesQueryParams(query, { includePaging = true } = {}) {
+    const params = new URLSearchParams();
+    const q = String(query.q || '').trim();
+    if (q.length >= 2) params.set('q', q);
+    if (query.bookId) params.set('book_id', query.bookId);
+    if (query.tags?.length) params.set('tags', query.tags.join(','));
+    if (query.noteKind && query.noteKind !== 'all') params.set('note_kind', query.noteKind);
+    if (query.color) params.set('color', query.color);
+    if (query.view && query.view !== 'active') params.set('view', query.view);
+    if (query.sort) params.set('sort', query.sort);
+    if (includePaging) {
+      params.set('limit', String(query.limit));
+      params.set('offset', String(query.offset));
+    }
+    return params;
+  }
+
+  async function fetchServerNotes(query) {
+    const response = await fetchWithTimeout(API_BASE + '/api/notes?' + buildNotesQueryParams(query));
+    if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+    return response.json();
+  }
+
+  function getStableNoteKey(note) {
+    return String(note.server_id || note.id || note.client_id || '');
+  }
+
+  function filterAndSortLocalNotes(items, query) {
+    const q = String(query.q || '').trim().toLowerCase();
+    return items.filter(note => {
+      if (query.view === 'trash' ? !note.deleted_at : note.deleted_at) return false;
+      if (query.bookId && note.book_id !== query.bookId) return false;
+      if (query.noteKind === 'reflected' && !note.note) return false;
+      if (query.noteKind === 'highlight' && note.note) return false;
+      if (query.color && note.color !== query.color) return false;
+      if (q && q.length >= 2 && ![note.highlight_text, note.note, ...(note.tags || [])]
+        .join(' ').toLowerCase().includes(q)) return false;
+      return true;
+    }).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+  }
+
+  async function loadOfflineNotes(query) {
+    const local = await dbGetAllSafe('highlights');
+    return { items: filterAndSortLocalNotes(local, query), total: local.length, has_more: false, facets: {} };
+  }
+
+  async function loadPendingNotes() {
+    const [local, queued] = await Promise.all([
+      dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue'),
+    ]);
+    const pendingKeys = new Set(queued.map(operation => String(operation.entity_id || '')));
+    return filterAndSortLocalNotes(local.filter(note => pendingKeys.has(String(note.id)) || !note.synced), notesQuery);
+  }
+
+  function mergeServerAndLocalNotes(serverItems, localItems, queuedOperations) {
+    const merged = new Map(localItems.map(item => [getStableNoteKey(item), item]));
+    serverItems.forEach(item => merged.set(getStableNoteKey(item), item));
+    queuedOperations.forEach(operation => {
+      const key = String(operation.entity_id || '');
+      const payload = operation.payload || {};
+      if (operation.type.endsWith('.delete') || operation.type.endsWith('.trash')) merged.delete(key);
+      else if (key) merged.set(key, { ...merged.get(key), ...payload, synced: false });
+    });
+    return [...merged.values()];
+  }
+
+  function renderNotesManagement(items) {
+    if (!dom.notesList) return;
+    dom.notesList.innerHTML = items.length ? items.map(note => `
+      <article class="note-management-card">
+        <strong>${escapeHTML(note.highlight_text || '')}</strong>
+        <p>${escapeHTML(note.note || '未写感悟')}</p>
+        ${note.synced === false ? '<span>待同步</span>' : ''}
+      </article>`).join('') : '<div class="empty-state notes-empty-state"><p>还没有可显示的笔记</p></div>';
+    if (dom.notesPageStatus) dom.notesPageStatus.textContent = `第 ${Math.floor(notesQuery.offset / notesQuery.limit) + 1} 页`;
+    if (dom.notesPrevious) dom.notesPrevious.disabled = notesQuery.offset === 0;
+    if (dom.notesNext) dom.notesNext.disabled = !notesHasMore;
+  }
+
+  async function loadNotesManagement({ preserveDetail = false } = {}) {
+    const requestQuery = { ...notesQuery };
+    try {
+      if (requestQuery.dataScope === 'pending') {
+        notesItems = await loadPendingNotes();
+        notesTotal = notesItems.length;
+        notesHasMore = false;
+      } else {
+        const result = await fetchServerNotes(requestQuery);
+        const [local, queued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
+        notesItems = mergeServerAndLocalNotes(result.items || [], local, queued);
+        notesTotal = result.total || notesItems.length;
+        notesHasMore = Boolean(result.has_more);
+        notesLoadError = null;
+        if (dom.notesDataStatus) dom.notesDataStatus.textContent = '在线数据';
+      }
+      notesLoaded = true;
+    } catch (error) {
+      notesLoadError = error;
+      if (!notesLoaded) {
+        const fallback = await loadOfflineNotes(requestQuery);
+        notesItems = fallback.items;
+        notesTotal = fallback.total;
+        notesHasMore = false;
+        if (dom.notesDataStatus) dom.notesDataStatus.textContent = '离线数据，可能不完整';
+      } else if (dom.notesDataStatus) {
+        dom.notesDataStatus.textContent = '加载失败，已保留旧列表；请重试';
+      }
+    }
+    renderNotesManagement(notesItems);
+  }
+
+  function scheduleNotesManagementLoad() {
+    clearTimeout(notesSearchTimer);
+    notesSearchTimer = setTimeout(() => loadNotesManagement(), 300);
+  }
+
+  function updateNotesQuery(changes) {
+    notesQuery = { ...notesQuery, ...changes, offset: 0 };
+    scheduleNotesManagementLoad();
+  }
+
   // ==================== SYNC ====================
   async function queueHighlightDelete(highlight) {
     if (!highlight || (!highlight.synced && !highlight.server_id)) return;
@@ -4403,8 +4558,14 @@
     await dbPut('books', book);
 
     const localHighlights = await dbGetByIndex('highlights', 'by_book', bookId);
+    const queuedOperations = dbHasStore('sync_queue')
+      ? await dbGetByIndex('sync_queue', 'by_book', bookId)
+      : [];
+    const queuedIds = new Set(queuedOperations.map(operation => String(operation.entity_id || '')));
     for (const highlight of localHighlights) {
-      await dbDelete('highlights', highlight.id);
+      if (!queuedIds.has(String(highlight.id)) && !queuedIds.has(String(highlight.server_id))) {
+        await dbDelete('highlights', highlight.id);
+      }
     }
     for (const highlight of state.highlights || []) {
       await dbPut('highlights', {
@@ -4415,6 +4576,16 @@
         synced: true,
         synced_at: highlight.updated_at || new Date().toISOString(),
       });
+    }
+    for (const operation of queuedOperations) {
+      const current = await dbGet('highlights', operation.entity_id);
+      if (!current) continue;
+      if (operation.type.endsWith('.trash') || operation.type.endsWith('.delete')) {
+        current.deleted_at = current.deleted_at || new Date().toISOString();
+      } else if (operation.payload) {
+        Object.assign(current, operation.payload, { synced: false });
+      }
+      await dbPut('highlights', current);
     }
 
     if (dbHasStore('bookmarks')) {
@@ -4450,6 +4621,7 @@
       method: queued.length > 0 ? 'POST' : 'GET',
       headers: queued.length > 0 ? { 'Content-Type': 'application/json' } : undefined,
       body: queued.length > 0 ? JSON.stringify({
+        protocol_version: 2,
         operations: queued.map(item => ({
           op_id: item.op_id,
           type: item.type,
@@ -4565,6 +4737,20 @@
     dom.btnNavCreate.addEventListener('click', showCreation);
     dom.btnLibraryCreate.addEventListener('click', showCreation);
     dom.btnNotesBack.addEventListener('click', showLibrary);
+    const notesFilterBindings = [
+      [dom.notesBookFilter, 'bookId'], [dom.notesTagFilter, 'tags'],
+      [dom.notesKindFilter, 'noteKind'], [dom.notesColorFilter, 'color'],
+      [dom.notesSort, 'sort'],
+    ];
+    notesFilterBindings.forEach(([element, key]) => element?.addEventListener('change', () => {
+      updateNotesQuery({ [key]: key === 'tags' ? (element.value ? [element.value] : []) : element.value });
+    }));
+    dom.notesSearch?.addEventListener('input', () => updateNotesQuery({ q: dom.notesSearch.value }));
+    dom.notesPendingOnly?.addEventListener('change', () => updateNotesQuery({ dataScope: dom.notesPendingOnly.value }));
+    dom.btnNotesTrash?.addEventListener('click', () => updateNotesQuery({ view: notesQuery.view === 'trash' ? 'active' : 'trash' }));
+    dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });
+    dom.notesPrevious?.addEventListener('click', () => { notesQuery.offset = Math.max(0, notesQuery.offset - notesQuery.limit); loadNotesManagement(); });
+    dom.notesNext?.addEventListener('click', () => { notesQuery.offset += notesQuery.limit; loadNotesManagement(); });
     window.addEventListener('hashchange', () => applyCurrentRoute());
     window.addEventListener('popstate', () => applyCurrentRoute());
 

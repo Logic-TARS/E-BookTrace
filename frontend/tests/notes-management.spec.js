@@ -3,6 +3,8 @@ import {
   INDEXED_DB_NAME,
   INDEXED_DB_VERSION,
   installNotesApiRoutes,
+  makeNote,
+  seedNotesIndexedDb,
 } from './helpers/notes-management.mjs';
 
 test.describe('notes management shell', () => {
@@ -19,6 +21,66 @@ test.describe('notes management shell', () => {
     await expect(page.getByText('视频号稿件')).toHaveCount(0);
     await expect(page.getByText('导出到 Obsidian')).toHaveCount(0);
     await expect(page.locator('#draft-editor, #draft-list, #btn-generate-video, #btn-generate-article')).toHaveCount(0);
+  });
+
+  test('online notes query sends filters after debounce', async ({ page }) => {
+    const state = { notes: [makeNote()], requests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+
+    await page.getByLabel('搜索笔记').fill('思想');
+    await page.getByLabel('内容类型').selectOption('reflected');
+    await page.getByLabel('高亮颜色').selectOption('yellow');
+    await page.getByLabel('排序').selectOption('position');
+
+    await expect.poll(() => state.requests.filter(request => request.pathname === '/api/notes').length).toBe(1);
+    const url = new URL('http://localhost' + state.requests.find(request => request.pathname === '/api/notes').search);
+    expect(url.searchParams.get('q')).toBe('思想');
+    expect(url.searchParams.get('note_kind')).toBe('reflected');
+    expect(url.searchParams.get('color')).toBe('yellow');
+    expect(url.searchParams.get('sort')).toBe('position');
+    expect(url.searchParams.get('offset')).toBe('0');
+  });
+
+  test('one character search stays local and shows guidance', async ({ page }) => {
+    const state = { notes: [], requests: [] };
+    await installNotesApiRoutes(page, state);
+    await page.goto('/#/creation');
+    state.requests.length = 0;
+    await page.getByLabel('搜索笔记').fill('字');
+    await page.waitForTimeout(400);
+    expect(state.requests.filter(request => request.pathname === '/api/notes')).toHaveLength(0);
+    await expect(page.getByText('至少输入 2 个字符')).toBeVisible();
+  });
+
+  test('initial API failure falls back to IndexedDB with incomplete warning', async ({ page }) => {
+    await seedNotesIndexedDb(page, { highlights: [makeNote({ synced: false })] });
+    await page.route('**/api/notes**', route => route.abort('failed'));
+    await page.goto('/#/creation');
+
+    await expect(page.getByText('测试划线')).toBeVisible();
+    await expect(page.getByText('离线数据，可能不完整')).toBeVisible();
+  });
+
+  test('pending view uses local queue instead of filtering server page', async ({ page }) => {
+    const pending = makeNote({ id: 'local-note', server_id: null, synced: false });
+    await seedNotesIndexedDb(page, {
+      highlights: [pending],
+      operations: [{
+        id: 'highlight.upsert:book-1:local-note',
+        op_id: 'pending-op',
+        book_id: 'book-1',
+        type: 'highlight.upsert',
+        entity_id: 'local-note',
+        payload: pending,
+      }],
+    });
+    await installNotesApiRoutes(page, { notes: [makeNote()] });
+    await page.goto('/#/creation');
+    await page.getByLabel('数据范围').selectOption('pending');
+
+    await expect(page.getByText('测试划线')).toBeVisible();
+    await expect(page.getByText('待同步')).toBeVisible();
   });
 
   test('notes management returns to library and browser history restores route', async ({ page }) => {
