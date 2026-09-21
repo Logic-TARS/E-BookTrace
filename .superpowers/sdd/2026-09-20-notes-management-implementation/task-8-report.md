@@ -1,10 +1,10 @@
 # Task 8 报告：在线查询、离线回退、筛选、分页与待同步视图
 
 ## 状态
-修复轮 1/5 已提交；新增测试仍有环境/fixture 阻塞，详见测试摘要。
+修复轮 2/5 已提交；notes 全量与主要回归已执行，详见测试摘要。
 
 ## 提交
-`8717445 Harden notes query fallback and identity merge`
+`c90014b Complete notes query repair round two`
 
 ## 实现摘要
 - 添加笔记查询状态、服务器查询参数、300ms 防抖、至少 2 字符搜索门槛。
@@ -18,12 +18,16 @@
 ## 测试
 - `node --check frontend/app.js`：通过。
 - `git diff --check`：通过。
-- `npm test -- tests/notes-management.spec.js --grep "online|offline|search|filter|sort|pagination|pending"`：webServer 已可启动；新增用例仍未全绿：在线测试曾因 facets/排序 option 缺失超时，短搜索暴露初始化请求计数时序，pending 测试在无稳定 origin 的 seed 阶段出现 IndexedDB SecurityError。随后已补充 facets 默认值、筛选 option、短搜索本地路径和选择清理逻辑，需在稳定浏览器环境重跑确认。
+- `npm test -- tests/notes-management.spec.js`：13 passed, 1 failed（后续已单独重跑失败用例并通过；失败原因为 seed 后未 reload）。
+- `npm test -- tests/notes-management.spec.js --grep "one character|queued aliases|pending view"`：3 passed。
+- `npm test -- tests/ai-qa.spec.js`：2 passed, 2 failed；失败原因为既有 helper 使用 IndexedDB version 5，已改为 static origin + version 6，需重跑确认。
+- `npm test -- tests/server-sync.spec.js`：1 passed。
+- `npm test -- tests/mobile-layout.spec.js`：11 passed。
 - `node --check frontend/app.js`：通过。
 - `git diff --check`：通过。
 
 ## 关注点
-- 由于测试 HTTP server 未能启动，新增浏览器用例未完成运行验证；需要在具有可用 `.venv/Scripts/python.exe` 的环境重跑。
-- 本次严格限定在 Task 8 brief 指定的数据加载层；未实现详情、批量操作或最终 Markdown 导出逻辑。
-- 工作区提交包含 `frontend/app.js`、`frontend/index.html`、`frontend/tests/notes-management.spec.js`；helper 未改动。
-. 
+- notes 全量首轮有 1 个 seed 时序失败，已通过单独 edge-case 重跑验证；建议下一轮重跑全量确认。
+- ai-qa 首轮仍有 2 个旧 version-5 helper 用例失败；本轮已切换 static origin/version 6，但未获得第二次 ai-qa 全量结果。
+- 本次严格限定 Task 8 范围；未实现详情编辑、批量 API 客户端或最终 Markdown。
+

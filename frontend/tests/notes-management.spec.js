@@ -27,6 +27,7 @@ test.describe('notes management shell', () => {
     const state = { notes: [makeNote()], requests: [] };
     await installNotesApiRoutes(page, state);
     await page.goto('/#/creation');
+    await expect.poll(() => state.requests.filter(request => request.pathname === '/api/notes').length).toBeGreaterThan(0);
     state.requests.length = 0;
 
     await page.getByLabel('搜索笔记').fill('思想');
@@ -47,6 +48,10 @@ test.describe('notes management shell', () => {
     const state = { notes: [makeNote({ highlight_text: '字本地内容' })], requests: [] };
     await installNotesApiRoutes(page, state);
     await page.goto('/#/creation');
+    await expect.poll(() => state.requests.filter(request => request.pathname === '/api/notes').length).toBeGreaterThan(0);
+    state.requests.length = 0;
+    await seedNotesIndexedDb(page, { highlights: [makeNote({ highlight_text: '字本地内容' })] });
+    await page.reload();
     await expect.poll(() => state.requests.filter(request => request.pathname === '/api/notes').length).toBeGreaterThan(0);
     state.requests.length = 0;
     await page.getByLabel('搜索笔记').fill('字');
@@ -74,21 +79,23 @@ test.describe('notes management shell', () => {
 
   test('queued aliases override server identity without adding cached unrelated notes', async ({ page }) => {
     const local = makeNote({ id: 'local-id', client_id: 'client-id', server_id: null, highlight_text: '本地覆盖', synced: false });
+    await page.goto('/#/creation');
     await seedNotesIndexedDb(page, { highlights: [local], operations: [{
       id: 'highlight.upsert:book-1:local-id', op_id: 'op-1', book_id: 'book-1',
       type: 'highlight.upsert', entity_id: 'local-id', payload: local,
     }] });
     const state = { notes: [makeNote({ id: 'server-id', server_id: 'server-id', client_id: 'client-id', highlight_text: '服务器旧值' })], requests: [] };
     await installNotesApiRoutes(page, state);
-    await page.goto('/#/creation');
+    await page.reload();
     await expect(page.getByText('本地覆盖')).toBeVisible();
     await expect(page.getByText('服务器旧值')).toHaveCount(0);
   });
 
   test('initial API failure falls back to IndexedDB with incomplete warning', async ({ page }) => {
+    await page.goto('/#/creation');
     await seedNotesIndexedDb(page, { highlights: [makeNote({ synced: false })] });
     await page.route('**/api/notes**', route => route.abort('failed'));
-    await page.goto('/#/creation');
+    await page.reload();
 
     await expect(page.getByText('测试划线')).toBeVisible();
     await expect(page.getByText('离线数据，可能不完整')).toBeVisible();
@@ -96,6 +103,7 @@ test.describe('notes management shell', () => {
 
   test('pending view uses local queue instead of filtering server page', async ({ page }) => {
     const pending = makeNote({ id: 'local-note', server_id: null, synced: false });
+    await page.goto('/#/creation');
     await seedNotesIndexedDb(page, {
       highlights: [pending],
       operations: [{
@@ -108,11 +116,11 @@ test.describe('notes management shell', () => {
       }],
     });
     await installNotesApiRoutes(page, { notes: [makeNote()] });
-    await page.goto('/#/creation');
+    await page.reload();
     await page.getByLabel('数据范围').selectOption('pending');
 
     await expect(page.getByText('测试划线')).toBeVisible();
-    await expect(page.getByText('待同步')).toBeVisible();
+    await expect(page.locator('#notes-management-list').getByText('待同步')).toBeVisible();
   });
 
   test('notes management returns to library and browser history restores route', async ({ page }) => {

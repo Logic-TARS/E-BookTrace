@@ -1041,7 +1041,8 @@
     // Delete book record
     await dbDelete('books', bookId);
     // Delete associated highlights
-    const highlights = await dbGetByIndex('highlights', 'by_book', bookId);
+    const highlights = (await dbGetByIndex('highlights', 'by_book', bookId))
+      .filter(highlight => !highlight.deleted_at);
     for (const h of highlights) {
       await queueHighlightDelete(h);
       await dbDelete('highlights', h.id);
@@ -1221,7 +1222,8 @@
 
     for (const book of books) {
       if (book.id === main.id) continue;
-      const highlights = await dbGetByIndex('highlights', 'by_book', book.id);
+      const highlights = (await dbGetByIndex('highlights', 'by_book', book.id))
+        .filter(highlight => !highlight.deleted_at);
       for (const highlight of highlights) {
         await dbPut('highlights', {
           ...highlight,
@@ -1313,7 +1315,8 @@
     }
     await dbPut('books', merged);
 
-    const highlights = await dbGetByIndex('highlights', 'by_book', oldId);
+    const highlights = (await dbGetByIndex('highlights', 'by_book', oldId))
+      .filter(highlight => !highlight.deleted_at);
     for (const highlight of highlights) {
       const updated = {
         ...highlight,
@@ -4428,23 +4431,46 @@
 
   function filterAndSortLocalNotes(items, query) {
     const q = String(query.q || '').trim().toLowerCase();
-    return items.filter(note => {
-      if (q.length === 1) return false;
+    const filtered = items.filter(note => {
       if (query.view === 'trash' ? !note.deleted_at : note.deleted_at) return false;
       if (query.bookId && note.book_id !== query.bookId) return false;
       if (query.noteKind === 'reflected' && !note.note) return false;
       if (query.noteKind === 'highlight' && note.note) return false;
       if (query.color && note.color !== query.color) return false;
-      if (q && q.length >= 2 && ![note.highlight_text, note.note, ...(note.tags || [])]
+      if (query.tags?.length && !query.tags.every(tag => (note.tags || []).includes(tag))) return false;
+      if (q && ![note.highlight_text, note.note, ...(note.tags || [])]
         .join(' ').toLowerCase().includes(q)) return false;
       return true;
-    }).sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+    });
+    const sortValue = (note) => {
+      if (query.sort === 'created_desc') return String(note.created_at || '');
+      if (query.sort === 'position' || query.sort === 'book') return Number(note.progress_percent || 0);
+      return String(note.updated_at || '');
+    };
+    return filtered.sort((a, b) => {
+      const av = sortValue(a); const bv = sortValue(b);
+      return query.sort === 'position' || query.sort === 'book'
+        ? av - bv : String(bv).localeCompare(String(av));
+    });
+  }
+
+  function getLocalNotesFacets(items) {
+    const books = new Map();
+    items.forEach(note => {
+      if (note.book_id) books.set(note.book_id, { id: note.book_id, title: note.book_title || note.book_id });
+    });
+    return {
+      books: [...books.values()],
+      tags: [...new Set(items.flatMap(note => note.tags || []))],
+      note_kinds: [...new Set(items.map(note => note.note ? 'reflected' : 'highlight'))],
+      colors: [...new Set(items.map(note => note.color).filter(Boolean))],
+    };
   }
 
   async function loadOfflineNotes(query) {
     const local = await dbGetAllSafe('highlights');
-    const items = filterAndSortLocalNotes(local, query);
-    return { items, total: items.length, has_more: false, facets: {} };
+    const matching = filterAndSortLocalNotes(local, query);
+    return { items: matching, total: matching.length, has_more: false, facets: getLocalNotesFacets(matching) };
   }
 
   async function loadPendingNotes(query = notesQuery) {
@@ -4513,11 +4539,12 @@
     if (dom.notesNext) dom.notesNext.disabled = !notesHasMore;
   }
 
-  async function loadNotesManagement() {
-    const requestQuery = { ...notesQuery, q: String(notesQuery.q || '').trim() };
+  async function loadNotesManagement({ preserveDetail = false } = {}) {
+    const requestQuery = { ...notesQuery, q: String(notesQuery.q || '').trim(), tags: [...(notesQuery.tags || [])] };
     if (requestQuery.q.length === 1) {
       notesItems = filterAndSortLocalNotes(await dbGetAllSafe('highlights'), requestQuery);
       notesTotal = notesItems.length;
+      if (dom.notesDataStatus) dom.notesDataStatus.textContent = '至少输入 2 个字符';
       notesHasMore = false;
       renderNotesManagement(notesItems);
       return;
@@ -4547,11 +4574,15 @@
         notesTotal = fallback.total;
         notesHasMore = false;
         if (dom.notesDataStatus) dom.notesDataStatus.textContent = '离线数据，可能不完整';
+        renderNotesFacets(fallback.facets);
       } else if (dom.notesDataStatus) {
         dom.notesDataStatus.textContent = '加载失败，已保留旧列表；请重试';
       }
     }
     renderNotesManagement(notesItems);
+    if (preserveDetail && dom.notesLiveStatus) {
+      dom.notesLiveStatus.dataset.preserveDetail = 'true';
+    }
   }
 
   function scheduleNotesManagementLoad() {
@@ -4638,13 +4669,23 @@
         synced_at: highlight.updated_at || new Date().toISOString(),
       });
     }
+    const aliasMap = new Map();
+    localHighlights.forEach(highlight => getNoteAliases(highlight).forEach(alias => aliasMap.set(alias, highlight.id)));
     for (const operation of queuedOperations) {
-      const current = await dbGet('highlights', operation.entity_id);
+      const payload = operation.payload || {};
+      const aliases = [operation.entity_id, payload.id, payload.client_id, payload.server_id]
+        .filter(Boolean).map(String);
+      const localId = aliases.map(alias => aliasMap.get(alias) || alias).find(alias => aliasMap.has(alias));
+      const current = localId ? await dbGet('highlights', localId) : null;
       if (!current) continue;
+      aliases.forEach(alias => aliasMap.set(alias, current.id));
       if (operation.type.endsWith('.trash') || operation.type.endsWith('.delete')) {
         current.deleted_at = current.deleted_at || new Date().toISOString();
-      } else if (operation.payload) {
-        Object.assign(current, operation.payload, { synced: false });
+      } else if (operation.type.endsWith('.restore')) {
+        current.deleted_at = null;
+        Object.assign(current, payload, { synced: false });
+      } else if (payload) {
+        Object.assign(current, payload, { synced: false });
       }
       await dbPut('highlights', current);
     }

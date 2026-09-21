@@ -20,8 +20,9 @@ function canonicalBook(id, knowledgeId) {
 }
 
 async function seedLibrary(page, { book, highlights = [], bookmarks = [] }) {
+  await page.goto('/#/');
   await page.evaluate(({ book, highlights, bookmarks }) => new Promise((resolve, reject) => {
-    const request = indexedDB.open('marginalia', 5);
+    const request = indexedDB.open('marginalia', 6);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
       const db = request.result;
