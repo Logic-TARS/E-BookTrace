@@ -4562,6 +4562,9 @@
         <label>书名<input readonly value="${escapeHTML(note.book_title || '')}"></label>
         <label>作者<input readonly value="${escapeHTML(note.book_author || '')}"></label>
         <label>章节<input readonly value="${escapeHTML(note.chapter || '')}"></label>
+        <label>进度<input readonly value="${escapeHTML(String(note.progress_percent ?? 0))}%"></label>
+        <label>创建时间<input readonly value="${escapeHTML(note.created_at || '')}"></label>
+        <label>定位信息<textarea aria-label="定位信息" readonly>${escapeHTML(note.cfi_range || note.cfi || '')}</textarea></label>
         <label>感悟<textarea id="managed-note-text" aria-label="感悟">${escapeHTML(note.note || '')}</textarea></label>
         <label>标签<input id="managed-note-tags" aria-label="标签" value="${escapeHTML((note.tags || []).join(', '))}"></label>
         <label>高亮颜色<select id="managed-note-color" aria-label="高亮颜色"><option value="yellow">黄色</option><option value="green">绿色</option><option value="blue">蓝色</option><option value="pink">粉色</option></select></label>
@@ -4609,12 +4612,18 @@
     }
   }
 
-  function requestNotesNavigation(action) {
+  function requestNotesNavigation(action, requestedHash = window.location.hash) {
     if (!isManagedNoteDraftDirty()) return Promise.resolve(action());
+    const currentHash = `#${currentRoute || '/creation'}`;
     dom.notesUnsavedDialog.hidden = false;
     const buttons = dom.notesUnsavedDialog.querySelectorAll('button');
     return new Promise(resolve => {
-      buttons[0].onclick = () => { dom.notesUnsavedDialog.hidden = true; resolve(false); };
+      buttons[0].onclick = () => {
+        dom.notesUnsavedDialog.hidden = true;
+        if (window.location.hash !== currentHash) history.replaceState({}, '', currentHash);
+        if (currentRoute) renderRoute(currentRoute);
+        resolve(false);
+      };
       buttons[1].onclick = () => { dom.notesUnsavedDialog.hidden = true; closeManagedNote(); resolve(action()); };
       buttons[2].onclick = async () => { if (await saveManagedNoteDraft()) { dom.notesUnsavedDialog.hidden = true; resolve(action()); } };
     });
@@ -4622,9 +4631,17 @@
 
   async function deleteManagedNoteReflection() {
     if (!managedNoteDraft) return;
-    managedNoteUndo = createManagedNoteDraft(managedNoteDraft);
+    const previous = createManagedNoteDraft(managedNoteDraft);
+    managedNoteUndo = null;
     managedNoteDraft.note = '';
-    await saveManagedNoteDraft();
+    const saved = await saveManagedNoteDraft();
+    if (!saved) {
+      managedNoteDraft = previous;
+      renderManagedNoteDetail();
+      showToast('感悟删除失败', 'error');
+      return;
+    }
+    managedNoteUndo = previous;
     showToast('感悟已删除', 'success');
     const toastButton = document.createElement('button');
     toastButton.type = 'button'; toastButton.textContent = '撤销'; toastButton.className = 'btn btn-ghost btn-sm';
@@ -4956,15 +4973,15 @@
       element.addEventListener('focusout', () => setTimeout(() => scheduleReaderChromeHide(), 0));
     });
 
-    dom.btnNavLibrary.addEventListener('click', showLibrary);
-    dom.btnNavRead.addEventListener('click', () => {
+    dom.btnNavLibrary.addEventListener('click', () => requestNotesNavigation(showLibrary));
+    dom.btnNavRead.addEventListener('click', () => requestNotesNavigation(() => {
       if (currentBookMeta && currentRendition) {
-        navigateToRoute('/reader');
-      } else {
-        showLibrary();
-        showToast('请先从书库打开一本书', 'info');
+        return navigateToRoute('/reader');
       }
-    });
+      return showLibrary().then(() => {
+        showToast('请先从书库打开一本书', 'info');
+      });
+    }));
     dom.btnNavCreate.addEventListener('click', () => requestNotesNavigation(showCreation));
     dom.btnLibraryCreate.addEventListener('click', () => requestNotesNavigation(showCreation));
     dom.btnNotesBack.addEventListener('click', () => requestNotesNavigation(showLibrary));
@@ -4985,8 +5002,8 @@
     dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });
     dom.notesPrevious?.addEventListener('click', () => { notesQuery.offset = Math.max(0, notesQuery.offset - notesQuery.limit); loadNotesManagement(); });
     dom.notesNext?.addEventListener('click', () => { notesQuery.offset += notesQuery.limit; loadNotesManagement(); });
-    window.addEventListener('hashchange', () => requestNotesNavigation(applyCurrentRoute));
-    window.addEventListener('popstate', () => requestNotesNavigation(applyCurrentRoute));
+    window.addEventListener('hashchange', () => requestNotesNavigation(applyCurrentRoute, window.location.hash));
+    window.addEventListener('popstate', () => requestNotesNavigation(applyCurrentRoute, window.location.hash));
     window.addEventListener('beforeunload', (event) => {
       if (isManagedNoteDraftDirty()) { event.preventDefault(); event.returnValue = ''; }
     });

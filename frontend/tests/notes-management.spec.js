@@ -415,6 +415,55 @@ test.describe('notes management shell', () => {
     await expect(page.getByRole('textbox', { name: '感悟' })).toHaveValue('尚未保存');
   });
 
+  test('canceling browser route navigation restores the current notes route', async ({ page }) => {
+    const note = makeNote();
+    await installNotesApiRoutes(page, { notes: [note] });
+    await page.goto('/#/creation');
+    await page.getByText('测试划线').click();
+    await page.getByRole('textbox', { name: '感悟' }).fill('尚未保存');
+
+    await page.evaluate(() => {
+      history.pushState({}, '', '#/');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    await expect(page.getByRole('dialog', { name: '未保存的修改' })).toBeVisible();
+    await page.getByRole('button', { name: '取消' }).click();
+    await expect(page).toHaveURL(/#\/creation$/);
+    await expect(page.locator('#creation-view')).toHaveClass(/active/);
+    await expect(page.locator('#library-view')).not.toHaveClass(/active/);
+
+    await page.locator('#btn-notes-back').click();
+    await page.getByRole('button', { name: '放弃修改' }).click();
+    await expect(page).toHaveURL(/#\/$/);
+    await expect(page.locator('#library-view')).toHaveClass(/active/);
+  });
+
+  test('failed reflection deletion keeps draft and does not offer undo', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__failHighlightPut = false;
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value, ...args) {
+        if (this.name === 'highlights' && window.__failHighlightPut) {
+          window.__failHighlightPut = false;
+          throw new DOMException('forced highlight write failure', 'UnknownError');
+        }
+        return put.call(this, value, ...args);
+      };
+    });
+    const note = makeNote({ note: '原感悟' });
+    await installNotesApiRoutes(page, { notes: [note] });
+    await page.goto('/#/creation');
+    await seedNotesIndexedDb(page, { highlights: [note] });
+    await page.reload();
+    await page.getByText('测试划线').click();
+    await page.evaluate(() => { window.__failHighlightPut = true; });
+    await page.getByRole('button', { name: '删除感悟' }).click();
+
+    await expect(page.getByText('感悟删除失败')).toBeVisible();
+    await expect(page.getByRole('button', { name: '撤销' })).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: '感悟' })).toHaveValue('原感悟');
+  });
+
   test('deleting reflection keeps highlight and can be undone', async ({ page }) => {
     const note = makeNote({ note: '原感悟' });
     await installNotesApiRoutes(page, { notes: [note] });
