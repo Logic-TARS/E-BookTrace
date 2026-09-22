@@ -3,7 +3,7 @@
  * Network-first for app shell HTML/JS/CSS; cache-first for stable EPUB files;
  * network-only for API calls (503 when offline); cache-first for other static assets.
  */
-const APP_SHELL_CACHE_NAME = 'marginalia-shell-v25';
+const APP_SHELL_CACHE_NAME = 'marginalia-shell-v26';
 const EPUB_CACHE_NAME = 'marginalia-epubs-v1';
 
 const APP_SHELL = [
@@ -14,6 +14,9 @@ const APP_SHELL = [
   'manifest.json',
   'jszip.min.js',
   'epub.min.js',
+  'book-chat/index.html',
+  'book-chat/app.js?v=4',
+  'book-chat/style.css?v=3',
 ];
 
 // Install: cache app shell
@@ -97,10 +100,11 @@ self.addEventListener('fetch', (event) => {
     url.pathname.endsWith('/app.js') ||
     url.pathname.endsWith('/style.css')
   ) {
+    const fallback = url.pathname.startsWith('/book-chat/')
+      ? 'book-chat/index.html'
+      : 'index.html';
     event.respondWith(
-      networkFirst(event.request).then((response) => (
-        response || caches.match('index.html')
-      ))
+      networkFirst(event.request).then((response) => response || caches.match(fallback))
     );
     return;
   }
