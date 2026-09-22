@@ -85,18 +85,15 @@ async function waitForPageStable(page, timeout = 10000) {
 }
 
 /**
- * Helper: click the next button and wait for navigation to settle.
+ * Helpers: use the retained desktop keyboard navigation and wait for it to settle.
  */
-async function clickNext(page) {
-  await page.locator('#btn-nav-next').click();
+async function navigateNext(page) {
+  await page.keyboard.press('ArrowRight');
   await page.waitForTimeout(NAV_DELAY);
 }
 
-/**
- * Helper: click the prev button and wait for navigation to settle.
- */
-async function clickPrev(page) {
-  await page.locator('#btn-nav-prev').click();
+async function navigatePrev(page) {
+  await page.keyboard.press('ArrowLeft');
   await page.waitForTimeout(NAV_DELAY);
 }
 
@@ -123,7 +120,7 @@ test.describe('@smoke', () => {
     await expect(reader).toHaveClass(/reader-chrome-hidden/, { timeout: 6_000 });
     await expect(page.locator('.app-nav')).toBeHidden();
     await expect(page.locator('.reader-toolbar')).toBeHidden();
-    await expect(page.locator('.reader-footer')).toBeHidden();
+    await expect(page.locator('.reader-footer')).toHaveCount(0);
     await page.waitForTimeout(350);
 
     await doubleClickIframe(page);
@@ -131,10 +128,9 @@ test.describe('@smoke', () => {
     await expect(reader).not.toHaveClass(/reader-chrome-hidden/);
     await expect(page.locator('.app-nav')).toBeVisible();
     await expect(page.locator('.reader-toolbar')).toBeVisible();
-    await expect(page.locator('.reader-footer')).toBeVisible();
   });
 
-  test('narrow desktop viewport keeps exact one-page button navigation', async ({ page }) => {
+  test('narrow desktop viewport keeps exact one-page keyboard navigation', async ({ page }) => {
     await page.setViewportSize({ width: 920, height: 800 });
     await openFixture(page);
 
@@ -142,7 +138,7 @@ test.describe('@smoke', () => {
     const initialPageInfo = await getPageInfo(page);
     expect(initialPageInfo).not.toBeNull();
 
-    await clickNext(page);
+    await navigateNext(page);
 
     const nextPageInfo = await getPageInfo(page);
     expect(await getChapterLabel(page)).toBe(initialChapter);
@@ -175,7 +171,7 @@ test.describe('@boundary.forward', () => {
       let previousPageInfo = startPageInfo;
       let maxClicks = Math.max(30, (startPageInfo?.total || 0) + 5);
       while (chapterLabel === startChapter && maxClicks > 0) {
-        await clickNext(page);
+        await navigateNext(page);
         chapterLabel = await getChapterLabel(page);
         const currentPageInfo = await getPageInfo(page);
         expect(currentPageInfo).not.toBeNull();
@@ -203,15 +199,16 @@ test.describe('@boundary.backward', () => {
     await openFixture(page);
 
     for (let run = 0; run < RUNS; run++) {
-      // Jump to ~40% progress to get past chapter 1
-      await page.evaluate(() => {
-        const slider = document.querySelector('#progress-slider');
-        if (slider) {
-          slider.value = 40;
-          slider.dispatchEvent(new Event('input'));
-        }
-      });
-      await page.waitForTimeout(JUMP_DELAY);
+      // Advance past chapter 1 with the keyboard (the reader has no progress
+      // slider any more) so backward navigation can cross a section boundary.
+      let forwardChapter = await getChapterLabel(page);
+      let forwardGuard = 60;
+      while (forwardChapter.includes('Chapter 1') && forwardGuard > 0) {
+        await navigateNext(page);
+        forwardChapter = await getChapterLabel(page);
+        forwardGuard -= 1;
+      }
+      expect(forwardGuard).toBeGreaterThan(0);
       await waitForChapterStable(page);
       await waitForPageStable(page);
 
@@ -220,10 +217,10 @@ test.describe('@boundary.backward', () => {
       const startPageInfo = await getPageInfo(page);
       const startPage = startPageInfo ? startPageInfo.current : 0;
 
-      // Click prev repeatedly until we land on chapter 1
+      // Press prev repeatedly until we land on chapter 1
       let maxClicks = 50;
       while (!chapterLabel.includes('Chapter 1') && maxClicks > 0) {
-        await clickPrev(page);
+        await navigatePrev(page);
         chapterLabel = await getChapterLabel(page);
         maxClicks--;
       }
@@ -250,9 +247,9 @@ test.describe('@boundary.intra', () => {
       const initialPage = pageInfo ? pageInfo.current : 0;
       expect(pageInfo).not.toBeNull();
 
-      // Every click, including the first one, must advance exactly one page.
+      // Every press, including the first one, must advance exactly one page.
       for (let i = 0; i < 4; i++) {
-        await clickNext(page);
+        await navigateNext(page);
         pageInfo = await getPageInfo(page);
         const currentChapter = await getChapterLabel(page);
 

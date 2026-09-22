@@ -348,42 +348,38 @@ test.describe('@mobile mobile layout', () => {
   test('uses a full-height reader and modal mobile tool panels', async ({ page }) => {
     await openFixture(page);
     await expectNoHorizontalOverflow(page);
-    await expect(page.locator('#btn-nav-prev')).toBeHidden();
-    await expect(page.locator('#btn-nav-next')).toBeHidden();
+    await expect(page.locator('#btn-nav-prev, #btn-nav-next')).toHaveCount(0);
+    await expect(page.locator('.reader-footer')).toHaveCount(0);
 
     const readerMetrics = await page.evaluate(() => {
       const host = document.querySelector('#epub-container').getBoundingClientRect();
-      const footer = document.querySelector('.reader-footer').getBoundingClientRect();
+      const toolbar = document.querySelector('.reader-toolbar').getBoundingClientRect();
       const nav = document.querySelector('.app-nav').getBoundingClientRect();
       return {
         hostHeight: host.height,
+        hostTop: host.top,
         hostBottom: host.bottom,
-        footerTop: footer.top,
-        footerBottom: footer.bottom,
+        toolbarBottom: toolbar.bottom,
         navTop: nav.top,
       };
     });
     expect(readerMetrics.hostHeight).toBeGreaterThan(400);
-    expect(readerMetrics.hostBottom).toBeLessThanOrEqual(readerMetrics.footerTop + 1);
-    expect(readerMetrics.footerBottom).toBeLessThanOrEqual(readerMetrics.navTop + 1);
+    expect(readerMetrics.hostTop).toBeLessThan(readerMetrics.toolbarBottom);
+    expect(readerMetrics.hostBottom).toBeLessThanOrEqual(readerMetrics.navTop + 1);
+
+    // The v2 directory panel ships collapsed; Task 5 wires its toggling.
+    await expect(page.locator('#reader-navigator')).toBeHidden();
 
     await page.locator('#btn-reader-tools').click();
     await expect(page.locator('#reader-tool-panel')).toBeVisible();
-    await page.locator('#btn-toggle-ai').click();
-    await expect(page.locator('#reader-tool-panel')).toBeHidden();
-    await expect(page.locator('#ai-panel')).toBeVisible();
-    await expect(page.locator('#reader-panel-backdrop')).toBeVisible();
-
-    await page.locator('#btn-close-ai').click();
-    await expect(page.locator('#ai-panel')).toBeHidden();
-    await expect(page.locator('#reader-panel-backdrop')).toBeHidden();
-
-    await page.locator('#btn-reader-tools').click();
+    await expect(page.locator('#btn-toggle-navigator')).toHaveCount(1);
     await page.locator('#btn-toggle-notes').click();
     await expect(page.locator('#notes-panel')).toBeVisible();
-    await expect(page.locator('#ai-panel')).toBeHidden();
+    await expect(page.locator('#reader-tool-panel')).toBeHidden();
+    await expect(page.locator('#reader-panel-backdrop')).toBeVisible();
     await page.locator('#btn-close-notes-panel').click();
     await expect(page.locator('#notes-panel')).toBeHidden();
+    await expect(page.locator('#reader-panel-backdrop')).toBeHidden();
 
     await page.locator('#btn-reader-tools').click();
     await page.locator('#btn-toggle-search').click();
@@ -457,7 +453,7 @@ test.describe('@mobile mobile layout', () => {
     let lastPageInfo = await getReaderPageInfo(page);
     for (let attempt = 0; lastPageInfo && lastPageInfo.current < lastPageInfo.total && attempt < 120; attempt += 1) {
       const previousPage = lastPageInfo.current;
-      await page.locator('#btn-nav-next').dispatchEvent('click');
+      await page.keyboard.press('ArrowRight');
       await expect.poll(async () => (await getReaderPageInfo(page))?.current || 0).toBe(previousPage + 1);
       await page.waitForTimeout(220);
       lastPageInfo = await getReaderPageInfo(page);
@@ -509,17 +505,18 @@ test.describe('@mobile mobile layout', () => {
     const initialHost = await page.locator('#epub-container').boundingBox();
     await expect(reader).toHaveClass(/reader-chrome-hidden/, { timeout: 6_000 });
     await expect(page.locator('.reader-toolbar')).toBeHidden();
-    await expect(page.locator('.reader-footer')).toBeHidden();
+    await expect(page.locator('.reader-footer')).toHaveCount(0);
     await expect(page.locator('.app-nav')).toBeHidden();
     await page.waitForTimeout(350);
 
     const immersiveHost = await page.locator('#epub-container').boundingBox();
-    expect(immersiveHost.height).toBeGreaterThan(initialHost.height + 80);
+    // Hiding the chrome drops the bottom-nav reservation, giving the reader
+    // extra room (the v2 reader has no in-flow toolbar or footer).
+    expect(immersiveHost.height).toBeGreaterThan(initialHost.height + 40);
 
     await doubleTapIframeWithTouchscreen(page);
     await expect(reader).not.toHaveClass(/reader-chrome-hidden/, { timeout: 1_500 });
     await expect(page.locator('.reader-toolbar')).toBeVisible();
-    await expect(page.locator('.reader-footer')).toBeVisible();
     await expect(page.locator('.app-nav')).toBeVisible();
     await page.waitForTimeout(850);
 
@@ -530,8 +527,7 @@ test.describe('@mobile mobile layout', () => {
     await expect(revealButton).toBeVisible();
     const revealBounds = await revealButton.boundingBox();
     expect(revealBounds).not.toBeNull();
-    await expect(page.locator('#btn-nav-prev')).toBeHidden();
-    await expect(page.locator('#btn-nav-next')).toBeHidden();
+    await expect(page.locator('#btn-nav-prev, #btn-nav-next')).toHaveCount(0);
     await revealButton.click();
     await expect(reader).not.toHaveClass(/reader-chrome-hidden/);
   });

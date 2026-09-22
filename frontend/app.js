@@ -132,20 +132,12 @@
     notesCount: $('#notes-count'),
     toolbarBookTitle: $('#toolbar-book-title'),
     toolbarChapter: $('#toolbar-chapter'),
-    progressSlider: $('#progress-slider'),
     progressText: $('#progress-text'),
     pageText: $('#page-text'),
     btnBack: $('#btn-back'),
-    btnToggleAi: $('#btn-toggle-ai'),
     btnReaderTools: $('#btn-reader-tools'),
     btnRevealReaderChrome: $('#btn-reveal-reader-chrome'),
     readerToolPanel: $('#reader-tool-panel'),
-    btnCloseAi: $('#btn-close-ai'),
-    aiPanel: $('#ai-panel'),
-    aiMessages: $('#ai-messages'),
-    aiForm: $('#ai-form'),
-    aiQuestionInput: $('#ai-question-input'),
-    btnSendAi: $('#btn-send-ai'),
     aiIndexStatus: $('#ai-index-status'),
     aiConversationSelect: $('#ai-conversation-select'),
     btnNewAiConversation: $('#btn-new-ai-conversation'),
@@ -174,8 +166,6 @@
     btnDeleteNote: $('#btn-delete-note'),
     btnCloseModal: $('#btn-close-modal'),
     toast: $('#toast'),
-    btnNavPrev: $('#btn-nav-prev'),
-    btnNavNext: $('#btn-nav-next'),
     readerLoading: $('#reader-loading'),
     readerLoadingMessage: $('#reader-loading-message'),
     readerLoadingDetail: $('#reader-loading-detail'),
@@ -607,6 +597,8 @@
     dom.libraryView.classList.toggle('active', route === '/');
     dom.readerView.classList.toggle('active', route === '/reader');
     dom.creationView.classList.toggle('active', route === '/creation');
+    // v2's reader theme layer scopes some rules behind body.reader-active.
+    document.body.classList.toggle('reader-active', route === '/reader');
     if (route === '/reader') {
       setReaderChromeVisible(true);
       setActiveNav('read');
@@ -693,7 +685,6 @@
 
   function hasOpenReaderSurface() {
     return !dom.readerToolPanel.hidden ||
-      !dom.aiPanel.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden ||
       !dom.noteModal.hidden ||
@@ -830,9 +821,6 @@
     if (dom.btnReaderTools) {
       dom.btnReaderTools.setAttribute('aria-expanded', String(!dom.readerToolPanel.hidden));
     }
-    if (dom.btnToggleAi) {
-      dom.btnToggleAi.setAttribute('aria-expanded', String(!dom.aiPanel.classList.contains('collapsed')));
-    }
     if (dom.btnToggleNotes) {
       dom.btnToggleNotes.setAttribute('aria-expanded', String(!dom.notesPanel.classList.contains('collapsed')));
     }
@@ -843,7 +831,6 @@
 
   function syncReaderPanelBackdrop() {
     const hasOpenPanel = isMobileLayout() && dom.readerView.classList.contains('active') && (
-      !dom.aiPanel.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden
     );
@@ -853,10 +840,6 @@
 
   function closeOtherMobileReaderPanels(except) {
     if (!isMobileLayout()) return;
-    if (except !== 'ai') {
-      dom.aiPanel.classList.add('collapsed');
-      dom.readerMain.classList.add('ai-collapsed');
-    }
     if (except !== 'notes') {
       dom.notesPanel.classList.remove('open');
       dom.notesPanel.classList.add('collapsed');
@@ -871,7 +854,7 @@
 
   function closeMobileReaderPanels({ restoreFocus = false } = {}) {
     if (!isMobileLayout()) return false;
-    const hadOpenPanel = !dom.aiPanel.classList.contains('collapsed') ||
+    const hadOpenPanel =
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden;
     closeOtherMobileReaderPanels('');
@@ -1626,7 +1609,6 @@
 
     if (currentBookMeta && currentBookMeta.id === book.id) {
       currentBookMeta = book;
-      setAiIndexState(book.knowledge_status, book.knowledge_error);
     }
     await renderLibrary();
 
@@ -1648,9 +1630,6 @@
     book.knowledge_status = 'uploading';
     book.knowledge_error = '';
     await dbPut('books', book);
-    if (currentBookMeta && currentBookMeta.id === book.id) {
-      setAiIndexState('uploading');
-    }
     try {
       let resp;
       if (book.filename && !book.file_blob) {
@@ -1690,7 +1669,6 @@
       await dbPut('books', book);
       if (currentBookMeta && currentBookMeta.id === book.id) {
         currentBookMeta = book;
-        setAiIndexState(book.knowledge_status, book.knowledge_error);
       }
       pollKnowledgeStatus(book);
       renderLibrary();
@@ -1703,9 +1681,6 @@
       book.knowledge_status = 'failed';
       book.knowledge_error = err.message;
       await dbPut('books', book);
-      if (currentBookMeta && currentBookMeta.id === book.id) {
-        setAiIndexState('failed', err.message);
-      }
     } finally {
       knowledgeUploadsInFlight.delete(book.id);
     }
@@ -1754,8 +1729,6 @@
         }
         if (currentBookMeta && currentBookMeta.id === book.id) {
           currentBookMeta = book;
-          setAiIndexState(data.status, data.error_message || '');
-          if (data.status === 'ready') await loadAiConversations();
         }
         if (data.status === 'pending' || data.status === 'indexing') {
           aiIndexPollTimer = setTimeout(poll, 2000);
@@ -1763,9 +1736,8 @@
           renderLibrary();
         }
       } catch (err) {
-        if (currentBookMeta && currentBookMeta.id === book.id) {
-          setAiIndexState('failed', '无法读取索引状态');
-        }
+        // The index-status UI left with the AI panel; stop polling quietly.
+        console.warn('Knowledge status poll failed:', err);
       }
     };
     poll();
@@ -1845,9 +1817,6 @@
     aiMessages = [];
     aiConversations = [];
     currentAiConversationId = null;
-    renderAiMessages();
-    renderAiConversationOptions();
-    setAiIndexState(bookMeta.knowledge_status || 'unregistered', bookMeta.knowledge_error || '');
     if (isServerBook || (bookMeta.filename && !bookMeta.file_blob)) {
       ensureKnowledgeBook(bookMeta);
     }
@@ -1934,7 +1903,6 @@
 
       // Full-book location generation can take minutes for large EPUBs. It is
       // useful for percentages and jumps, but must never block the first page.
-      dom.progressSlider.disabled = true;
       dom.pageText.textContent = '正在计算页码…';
       warmLocationsWithProgress(book).catch((err) => {
         console.warn('Location generation failed:', err);
@@ -1987,7 +1955,6 @@
     const pct = Math.round(percent * 100);
 
     // Update progress UI
-    dom.progressSlider.value = pct;
     dom.progressText.textContent = pct + '%';
     updatePageUI();
 
@@ -2067,7 +2034,6 @@
     }
     if (percent == null) return;
     const pct = Math.round(percent * 100);
-    dom.progressSlider.value = pct;
     dom.progressText.textContent = pct + '%';
     updatePageUI();
   }
@@ -2209,11 +2175,6 @@
       || tagName === 'select';
   }
 
-  function setPageNavigationDisabled(disabled) {
-    if (dom.btnNavPrev) dom.btnNavPrev.disabled = disabled;
-    if (dom.btnNavNext) dom.btnNavNext.disabled = disabled;
-  }
-
   function navigatePageWhenReady(direction, source, attempt = 0) {
     if (isLayoutRefreshing && attempt < 10) {
       return new Promise(resolve => {
@@ -2236,7 +2197,6 @@
     releaseTransferredProgressFloor();
     pageNavigationInProgress = true;
     pageNavigationToken += 1;
-    setPageNavigationDisabled(true);
 
     let navigation;
     try {
@@ -2287,7 +2247,6 @@
     } catch (err) {
       console.warn('Page navigation failed:', source, err);
       pageNavigationInProgress = false;
-      setPageNavigationDisabled(false);
       return Promise.resolve(false);
     }
 
@@ -2303,7 +2262,6 @@
       .finally(() => {
         window.setTimeout(() => {
           pageNavigationInProgress = false;
-          setPageNavigationDisabled(false);
         }, PAGE_NAVIGATION_COOLDOWN);
       });
   }
@@ -2314,7 +2272,6 @@
     if (getLocationCount(book.locations) > 0) {
       locationsReadyBook = book;
       locationsReadyPromise = Promise.resolve();
-      dom.progressSlider.disabled = false;
       updatePageUI();
       return locationsReadyPromise;
     }
@@ -2322,13 +2279,11 @@
     locationsReadyBook = book;
     locationsReadyPromise = book.locations.generate(1000)
       .then(() => {
-        dom.progressSlider.disabled = false;
         updatePageUI();
       })
       .catch((err) => {
         locationsReadyBook = null;
         locationsReadyPromise = null;
-        dom.progressSlider.disabled = true;
         throw err;
       });
 
@@ -2339,11 +2294,9 @@
     if (!currentRendition || !currentRendition.book || !currentRendition.book.locations) return;
     releaseTransferredProgressFloor();
     const jumpToken = ++progressJumpToken;
-    const previousValue = dom.progressSlider.value;
 
     try {
       const locations = currentRendition.book.locations;
-      dom.progressSlider.disabled = true;
       dom.progressText.textContent = getLocationCount(locations) > 0 ? '跳转中...' : '定位中...';
       setReaderLoading('正在跳转...', '正在定位目标位置');
       await warmLocationsWithProgress(currentRendition.book);
@@ -2364,12 +2317,10 @@
       }
     } catch (err) {
       console.warn('Progress jump failed:', err);
-      dom.progressSlider.value = previousValue;
       showToast('进度跳转失败', 'error');
       updateProgressUI();
     } finally {
       if (jumpToken === progressJumpToken) {
-        dom.progressSlider.disabled = false;
         hideReaderLoading();
       }
     }
@@ -3827,7 +3778,7 @@
       return;
     }
 
-    const progress = currentBookMeta.progress_percent || parseInt(dom.progressSlider.value || '0', 10) || 0;
+    const progress = currentBookMeta.progress_percent || 0;
     const chapter = currentChapter || dom.toolbarChapter.textContent || '正文';
     const now = Date.now();
     const bookmark = {
@@ -4066,14 +4017,15 @@
   }
 
   function toggleAiPanel(forceOpen) {
-    const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : dom.aiPanel.classList.contains('collapsed');
+    // The AI panel left the reader view with the v2 markup; the remaining body
+    // is dead code that Task 7 removes wholesale.
+    const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : false;
     if (shouldOpen) {
       setReaderChromeVisible(true);
       cancelReaderChromeHide();
       closeOtherMobileReaderPanels('ai');
       if (isMobileLayout()) setReaderToolsOpen(false, { skipChromeSchedule: true });
     }
-    dom.aiPanel.classList.toggle('collapsed', !shouldOpen);
     dom.readerMain.classList.toggle('ai-collapsed', !shouldOpen);
     refreshReaderLayout();
     syncReaderToolStates();
@@ -5400,65 +5352,14 @@
     // Back to library
     dom.btnBack.addEventListener('click', () => requestNotesNavigation(showLibrary));
 
-    // AI book Q&A
+    // Reader tools
     dom.btnReaderTools.addEventListener('click', toggleReaderTools);
     dom.btnRevealReaderChrome.addEventListener('click', () => revealReaderChromeTemporarily());
-    dom.btnToggleAi.addEventListener('click', () => toggleAiPanel());
-    dom.btnCloseAi.addEventListener('click', () => toggleAiPanel(false));
-    dom.aiForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      askBookQuestion(dom.aiQuestionInput.value);
-    });
     dom.btnOperationClose.addEventListener('click', () => hideOperationStatus());
     dom.btnOperationRetry.addEventListener('click', async () => {
       if (!operationBookId) return;
       const book = await dbGet('books', operationBookId);
       if (book) await retryBookUpload(book);
-    });
-    dom.aiPanel.querySelectorAll('[data-ai-question]').forEach(btn => {
-      btn.addEventListener('click', () => askBookQuestion(btn.dataset.aiQuestion || ''));
-    });
-    dom.aiConversationSelect.addEventListener('change', async () => {
-      currentAiConversationId = dom.aiConversationSelect.value || null;
-      await loadAiMessages();
-      renderAiConversationOptions();
-    });
-    dom.btnNewAiConversation.addEventListener('click', () => createAiConversation());
-    dom.btnDeleteAiConversation.addEventListener('click', deleteCurrentAiConversation);
-    dom.btnRetryAiIndex.addEventListener('click', async () => {
-      if (!currentBookMeta) return;
-      if (!currentBookMeta.knowledge_book_id) {
-        if (!currentBookMeta.file_blob && currentBookMeta.filename) {
-          await recoverMissingKnowledgeBook(currentBookMeta, { promptForFile: true });
-          return;
-        }
-        await ensureKnowledgeBook(currentBookMeta);
-        return;
-      }
-      try {
-        const resp = await fetch(
-          API_BASE + '/api/knowledge/books/' +
-          encodeURIComponent(currentBookMeta.knowledge_book_id) + '/reindex',
-          { method: 'POST' }
-        );
-        if (resp.status === 404) {
-          await recoverMissingKnowledgeBook(currentBookMeta, {
-            promptForFile: !currentBookMeta.file_blob,
-          });
-          return;
-        }
-        if (!resp.ok) {
-          showToast('索引重试失败', 'error');
-          return;
-        }
-        currentBookMeta.knowledge_status = 'pending';
-        await dbPut('books', currentBookMeta);
-        setAiIndexState('pending');
-        pollKnowledgeStatus(currentBookMeta);
-      } catch (err) {
-        console.error('Knowledge reindex failed:', err);
-        showToast('索引重试失败：无法连接服务器', 'error');
-      }
     });
 
     // Toggle notes panel
@@ -5484,22 +5385,6 @@
     });
     dom.btnSearchClose.addEventListener('click', toggleSearchPanel);
     dom.btnCloseSearchPanel.addEventListener('click', () => setSearchPanelOpen(false));
-
-    // Progress slider
-    dom.progressSlider.addEventListener('input', (e) => {
-      cancelReaderChromeHide();
-      const pct = parseInt(dom.progressSlider.value);
-      dom.progressText.textContent = pct + '%';
-      if (!e.isTrusted && currentRendition) {
-        jumpToProgress(pct / 100);
-      }
-    });
-    dom.progressSlider.addEventListener('change', () => {
-      if (!currentRendition) return;
-      const pct = parseInt(dom.progressSlider.value) / 100;
-      jumpToProgress(pct);
-      scheduleReaderChromeHide();
-    });
 
     // Sync button
     dom.btnSync.addEventListener('click', syncToBackend);
@@ -5567,18 +5452,6 @@
         if (!dom.readerView.classList.contains('active')) return;
         syncToBackend();
       }
-    });
-
-    // Page navigation buttons
-    dom.btnNavPrev.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      navigatePage('prev', 'button');
-    });
-    dom.btnNavNext.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      navigatePage('next', 'button');
     });
 
     // Online/offline

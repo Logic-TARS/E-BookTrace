@@ -7,6 +7,21 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(__dirname, 'fixtures', 'multichapter.epub');
 
+/**
+ * The v2 reader keeps the sync button inside the tool panel, and the toolbar
+ * only exists while the chrome is revealed. Make both reachable first.
+ */
+async function openReaderTools(page) {
+  if (!(await page.locator('#btn-reader-tools').isVisible().catch(() => false))) {
+    const reveal = page.locator('#btn-reveal-reader-chrome');
+    await reveal.waitFor({ state: 'visible', timeout: 10_000 });
+    await reveal.dispatchEvent('click');
+  }
+  if (await page.locator('#reader-tool-panel').isHidden()) {
+    await page.click('#btn-reader-tools');
+  }
+}
+
 test.describe('server library sync', () => {
   test.use({ serviceWorkers: 'block' });
 
@@ -113,7 +128,7 @@ test.describe('server library sync', () => {
     await pageA.goto('/index.html');
     await pageA.setInputFiles('#file-input', FIXTURE);
     await expect(pageA.locator('#toolbar-book-title')).toContainText('Multichapter');
-    await pageA.click('#btn-reader-tools');
+    await openReaderTools(pageA);
     await pageA.click('#btn-add-bookmark');
     await expect(pageA.locator('#bookmarks-count')).toHaveText('1');
     await pageA.waitForFunction(() => {
@@ -215,12 +230,12 @@ test.describe('server library sync', () => {
     await pageA.evaluate(async () => { const r = indexedDB.open('marginalia', 6); r.onsuccess = () => { const db = r.result; const tx = db.transaction('sync_queue', 'readwrite'); tx.objectStore('sync_queue').put({ id: 'trash-book-op', op_id: 'trash-book-op', book_id: 'trash-book', type: 'highlight.trash', entity_id: 'client-note', payload: { deleted_at: new Date().toISOString() } }); tx.oncomplete = () => db.close(); }; });
     await pageA.locator('.book-card').click();
     await expect(pageA.locator('#toolbar-book-title')).toContainText('Trash Fixture');
-    await pageA.click('#btn-sync'); await expect.poll(() => state.highlights[0].deleted_at).not.toBeNull();
+    await openReaderTools(pageA); await pageA.click('#btn-sync'); await expect.poll(() => state.highlights[0].deleted_at).not.toBeNull();
     const contextB = await browser.newContext({ serviceWorkers: 'block' }); const pageB = await contextB.newPage(); await install(pageB); await pageB.goto('/index.html'); await expect(pageB.locator('.book-card')).toHaveCount(1);
     await pageB.evaluate(async () => { const r = indexedDB.open('marginalia', 6); r.onsuccess = () => { const db = r.result; const tx = db.transaction('sync_queue', 'readwrite'); tx.objectStore('sync_queue').put({ id: 'restore-book-op', op_id: 'restore-book-op', book_id: 'trash-book', type: 'highlight.restore', entity_id: 'client-note', payload: {} }); tx.oncomplete = () => db.close(); }; });
     await pageB.locator('.book-card').click();
     await expect(pageB.locator('#toolbar-book-title')).toContainText('Trash Fixture');
-    await pageB.click('#btn-sync'); await expect.poll(() => state.highlights[0].deleted_at).toBeNull();
+    await openReaderTools(pageB); await pageB.click('#btn-sync'); await expect.poll(() => state.highlights[0].deleted_at).toBeNull();
     await contextA.close(); await contextB.close();
   });
 });
