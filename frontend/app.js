@@ -58,6 +58,26 @@
   const FONT_SIZE_STEP = 5;   // percent per scroll
   const FONT_SIZE_MIN = 60;
   const FONT_SIZE_MAX = 200;
+  const READER_TYPOGRAPHY_KEY = 'marginalia.readerTypography';
+  const READER_FONT_FAMILIES = new Set(['original', 'serif', 'sans', 'kai']);
+  const READER_FONT_STACKS = {
+    serif: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, Georgia, serif',
+    sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    kai: '"Kaiti SC", STKaiti, KaiTi, "楷体", serif',
+  };
+  const READER_LINE_HEIGHT_DEFAULT = 1.7;
+  const READER_LINE_HEIGHT_MIN = 1.2;
+  const READER_LINE_HEIGHT_MAX = 2.4;
+  const READER_PARAGRAPH_SPACING_DEFAULT = 0.5;
+  const READER_PARAGRAPH_SPACING_MIN = 0;
+  const READER_PARAGRAPH_SPACING_MAX = 2;
+  const READER_SPACING_STEP = 0.1;
+  const FONT_ZOOM_DELTA_THRESHOLD = 10;
+  let currentReaderFontFamily = 'original';
+  let currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+  let currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
+  let fontZoomAccumulatedDelta = 0;
+  let fontZoomResetTimer = null;
   let searchResultsList = [];
   let searchHighlightKeys = [];
   let aiMessages = [];
@@ -147,6 +167,18 @@
     btnToggleNotes: $('#btn-toggle-notes'),
     btnToggleSearch: $('#btn-toggle-search'),
     btnToggleReaderAutoHide: $('#btn-toggle-reader-auto-hide'),
+    readerFontFamily: $('#reader-font-family'),
+    readerFontSize: $('#reader-font-size'),
+    readerFontSizeValue: $('#reader-font-size-value'),
+    btnReaderFontDecrease: $('#btn-reader-font-decrease'),
+    btnReaderFontReset: $('#btn-reader-font-reset'),
+    btnReaderFontIncrease: $('#btn-reader-font-increase'),
+    readerLineHeight: $('#reader-line-height'),
+    readerLineHeightValue: $('#reader-line-height-value'),
+    btnReaderLineHeightReset: $('#btn-reader-line-height-reset'),
+    readerParagraphSpacing: $('#reader-paragraph-spacing'),
+    readerParagraphSpacingValue: $('#reader-paragraph-spacing-value'),
+    btnReaderParagraphSpacingReset: $('#btn-reader-paragraph-spacing-reset'),
     toolbarSearch: $('#toolbar-search'),
     searchInput: $('#search-input'),
     btnSearch: $('#btn-search'),
@@ -1872,6 +1904,7 @@
       if (!dom.readerLoading.isConnected) dom.epubContainer.appendChild(dom.readerLoading);
       currentRendition = rendition;
       _boundIframeDocuments = new WeakSet();
+      applyReaderTypography({ refresh: false });
 
       // Track chapter/location changes
       rendition.on('relocated', (location) => {
@@ -2093,6 +2126,157 @@
     } catch (_err) {
       return currentCfi || '';
     }
+  }
+
+  function normalizeReaderFontSize(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 100;
+    const clamped = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, parsed));
+    return Math.round(clamped / FONT_SIZE_STEP) * FONT_SIZE_STEP;
+  }
+
+  function normalizeReaderSpacing(value, min, max, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    const clamped = Math.min(max, Math.max(min, parsed));
+    return Number((Math.round(clamped / READER_SPACING_STEP) * READER_SPACING_STEP).toFixed(1));
+  }
+
+  function formatReaderSpacing(value) {
+    return Number(value).toFixed(1);
+  }
+
+  function updateReaderTypographyUI() {
+    if (dom.readerFontFamily) dom.readerFontFamily.value = currentReaderFontFamily;
+    if (dom.readerFontSize) dom.readerFontSize.value = String(currentFontSize);
+    if (dom.readerFontSizeValue) dom.readerFontSizeValue.value = `${currentFontSize}%`;
+    if (dom.btnReaderFontDecrease) dom.btnReaderFontDecrease.disabled = currentFontSize <= FONT_SIZE_MIN;
+    if (dom.btnReaderFontIncrease) dom.btnReaderFontIncrease.disabled = currentFontSize >= FONT_SIZE_MAX;
+    if (dom.readerLineHeight) dom.readerLineHeight.value = formatReaderSpacing(currentReaderLineHeight);
+    if (dom.readerLineHeightValue) dom.readerLineHeightValue.value = formatReaderSpacing(currentReaderLineHeight);
+    if (dom.readerParagraphSpacing) dom.readerParagraphSpacing.value = formatReaderSpacing(currentReaderParagraphSpacing);
+    if (dom.readerParagraphSpacingValue) {
+      dom.readerParagraphSpacingValue.value = `${formatReaderSpacing(currentReaderParagraphSpacing)}em`;
+    }
+  }
+
+  function persistReaderTypographyPreference() {
+    try {
+      localStorage.setItem(READER_TYPOGRAPHY_KEY, JSON.stringify({
+        fontFamily: currentReaderFontFamily,
+        fontSize: currentFontSize,
+        lineHeight: currentReaderLineHeight,
+        paragraphSpacing: currentReaderParagraphSpacing,
+      }));
+    } catch (_err) {
+      // The preference remains active for this session if storage is blocked.
+    }
+  }
+
+  function loadReaderTypographyPreference() {
+    currentReaderFontFamily = 'original';
+    currentFontSize = 100;
+    currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+    currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
+    try {
+      const saved = JSON.parse(localStorage.getItem(READER_TYPOGRAPHY_KEY) || 'null');
+      if (saved && typeof saved === 'object') {
+        if (READER_FONT_FAMILIES.has(saved.fontFamily)) {
+          currentReaderFontFamily = saved.fontFamily;
+        }
+        currentFontSize = normalizeReaderFontSize(saved.fontSize);
+        currentReaderLineHeight = normalizeReaderSpacing(
+          saved.lineHeight,
+          READER_LINE_HEIGHT_MIN,
+          READER_LINE_HEIGHT_MAX,
+          READER_LINE_HEIGHT_DEFAULT
+        );
+        currentReaderParagraphSpacing = normalizeReaderSpacing(
+          saved.paragraphSpacing,
+          READER_PARAGRAPH_SPACING_MIN,
+          READER_PARAGRAPH_SPACING_MAX,
+          READER_PARAGRAPH_SPACING_DEFAULT
+        );
+      }
+    } catch (_err) {
+      currentReaderFontFamily = 'original';
+      currentFontSize = 100;
+      currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+      currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
+    }
+    updateReaderTypographyUI();
+  }
+
+  function applyReaderTypographyToDocument(doc) {
+    if (!doc || !doc.head || !doc.documentElement) return;
+    const styleId = 'marginalia-reader-typography-style';
+    const existingStyle = doc.getElementById(styleId);
+    const fontStack = READER_FONT_STACKS[currentReaderFontFamily];
+    if (fontStack) {
+      doc.documentElement.setAttribute('data-marginalia-reader-font', currentReaderFontFamily);
+    } else {
+      doc.documentElement.removeAttribute('data-marginalia-reader-font');
+    }
+    const style = existingStyle || doc.createElement('style');
+    style.id = styleId;
+    const fontRule = fontStack ? `body, body * { font-family: ${fontStack} !important; }\n` : '';
+    style.textContent = `${fontRule}:where(body, p, div, li, blockquote) { line-height: ${formatReaderSpacing(currentReaderLineHeight)} !important; }\n:where(p) { margin-block: ${formatReaderSpacing(currentReaderParagraphSpacing)}em !important; }`;
+    if (!existingStyle) doc.head.appendChild(style);
+  }
+
+  function applyReaderTypography({ refresh = true } = {}) {
+    const anchorCfi = getCurrentAnchorCfi();
+    if (currentRendition && currentRendition.themes) {
+      currentRendition.themes.fontSize(`${currentFontSize}%`);
+    }
+    for (const iframe of findReaderIframes()) {
+      try {
+        applyReaderTypographyToDocument(iframe.contentDocument);
+      } catch (_err) {
+        // Ignore inaccessible or not-yet-ready rendition frames.
+      }
+    }
+    if (refresh && currentRendition) {
+      refreshReaderLayout({ anchorCfi });
+    }
+  }
+
+  function setReaderFontSize(value, { persist = true } = {}) {
+    currentFontSize = normalizeReaderFontSize(value);
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
+  }
+
+  function setReaderFontFamily(value, { persist = true } = {}) {
+    currentReaderFontFamily = READER_FONT_FAMILIES.has(value) ? value : 'original';
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
+  }
+
+  function setReaderLineHeight(value, { persist = true } = {}) {
+    currentReaderLineHeight = normalizeReaderSpacing(
+      value,
+      READER_LINE_HEIGHT_MIN,
+      READER_LINE_HEIGHT_MAX,
+      READER_LINE_HEIGHT_DEFAULT
+    );
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
+  }
+
+  function setReaderParagraphSpacing(value, { persist = true } = {}) {
+    currentReaderParagraphSpacing = normalizeReaderSpacing(
+      value,
+      READER_PARAGRAPH_SPACING_MIN,
+      READER_PARAGRAPH_SPACING_MAX,
+      READER_PARAGRAPH_SPACING_DEFAULT
+    );
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
   }
 
   function restoreLayoutAnchor(anchorCfi, refreshToken, navigationToken) {
@@ -3267,23 +3451,31 @@
     if (!currentRendition || !currentRendition.themes) return;
 
     const delta = event.deltaY || event.detail || 0;
-    if (Math.abs(delta) < 10) return;
+    if (!delta) return;
 
     fontZoomLockUntil = Date.now() + WHEEL_IDLE_MS;
     resetWheelGesture();
-
-    if (delta > 0) {
-      currentFontSize = Math.max(FONT_SIZE_MIN, currentFontSize - FONT_SIZE_STEP);
-    } else {
-      currentFontSize = Math.min(FONT_SIZE_MAX, currentFontSize + FONT_SIZE_STEP);
+    if (fontZoomAccumulatedDelta && Math.sign(fontZoomAccumulatedDelta) !== Math.sign(delta)) {
+      fontZoomAccumulatedDelta = 0;
     }
+    fontZoomAccumulatedDelta += delta;
+    if (fontZoomResetTimer) clearTimeout(fontZoomResetTimer);
+    fontZoomResetTimer = setTimeout(() => {
+      fontZoomAccumulatedDelta = 0;
+      fontZoomResetTimer = null;
+    }, WHEEL_IDLE_MS);
+    if (Math.abs(fontZoomAccumulatedDelta) < FONT_ZOOM_DELTA_THRESHOLD) return;
 
-    currentRendition.themes.fontSize(currentFontSize + '%');
+    const direction = fontZoomAccumulatedDelta > 0 ? -1 : 1;
+    fontZoomAccumulatedDelta = 0;
+    setReaderFontSize(currentFontSize + direction * FONT_SIZE_STEP);
   }
 
   // ==================== HIGHLIGHTING / SELECTION ====================
   function enableIframeTextSelection(doc) {
-    if (!doc || !doc.head || doc.getElementById('marginalia-selection-style')) return;
+    if (!doc || !doc.head) return;
+    applyReaderTypographyToDocument(doc);
+    if (doc.getElementById('marginalia-selection-style')) return;
     const style = doc.createElement('style');
     style.id = 'marginalia-selection-style';
     style.textContent = `
@@ -5368,6 +5560,33 @@
     dom.btnToggleReaderAutoHide.addEventListener('click', () => {
       setReaderChromeAutoHideEnabled(!readerChromeAutoHideEnabled);
     });
+    dom.readerFontFamily.addEventListener('change', () => {
+      setReaderFontFamily(dom.readerFontFamily.value);
+    });
+    dom.readerFontSize.addEventListener('input', () => {
+      setReaderFontSize(dom.readerFontSize.value);
+    });
+    dom.btnReaderFontDecrease.addEventListener('click', () => {
+      setReaderFontSize(currentFontSize - FONT_SIZE_STEP);
+    });
+    dom.btnReaderFontReset.addEventListener('click', () => {
+      setReaderFontSize(100);
+    });
+    dom.btnReaderFontIncrease.addEventListener('click', () => {
+      setReaderFontSize(currentFontSize + FONT_SIZE_STEP);
+    });
+    dom.readerLineHeight.addEventListener('input', () => {
+      setReaderLineHeight(dom.readerLineHeight.value);
+    });
+    dom.btnReaderLineHeightReset.addEventListener('click', () => {
+      setReaderLineHeight(READER_LINE_HEIGHT_DEFAULT);
+    });
+    dom.readerParagraphSpacing.addEventListener('input', () => {
+      setReaderParagraphSpacing(dom.readerParagraphSpacing.value);
+    });
+    dom.btnReaderParagraphSpacingReset.addEventListener('click', () => {
+      setReaderParagraphSpacing(READER_PARAGRAPH_SPACING_DEFAULT);
+    });
     dom.btnCloseNotesPanel.addEventListener('click', () => toggleNotesPanel(false));
     dom.readerPanelBackdrop.addEventListener('click', () => closeMobileReaderPanels({ restoreFocus: true }));
 
@@ -5497,6 +5716,7 @@
     }
 
     loadReaderChromeAutoHidePreference();
+    loadReaderTypographyPreference();
     observeReaderIframes();
     bindEvents();
     syncReaderToolStates();
