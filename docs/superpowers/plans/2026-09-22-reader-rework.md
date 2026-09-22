@@ -308,7 +308,7 @@ PY
 
 Expected: `replaced 182 lines`
 
-- [ ] **Step 3: 校验 id 集合与 v2 完全一致**
+- [ ] **Step 3: 校验 id 集合，并清掉被删元素在 app.js 里的引用与绑定**
 
 ```bash
 ids() { sed -n '/id="reader-view"/,/id="creation-view"/p' "$1" | grep -oE 'id="[a-zA-Z0-9_-]+"' | sort -u; }
@@ -318,7 +318,39 @@ diff /tmp/now.txt /tmp/ref.txt && echo "ID 集合与 v2 完全一致"
 grep -nE 'ai-panel|btn-toggle-ai|btn-nav-(prev|next)|progress-slider|ai-messages' frontend/index.html
 ```
 
-Expected: 第一行打印「ID 集合与 v2 完全一致」；`grep` **无输出**（AI / 翻页 / 进度滑块已全部消失）
+Expected: 第一行打印「ID 集合与 v2 完全一致」；`grep` **无输出**
+
+**标记删掉了，app.js 里的引用还在 —— 这一步必须同时清掉。** 否则 `dom.btnToggleAi.addEventListener(...)` 之类的 null 解引用会让**整个应用**在初始化时抛错（不只是阅读视图），本任务的全量回归会全线崩。
+
+```bash
+grep -nE "dom\.(btnToggleAi|btnCloseAi|aiPanel|aiMessages|aiForm|btnSendAi|aiConversationSelect|btnNewAiConversation|btnDeleteAiConversation|btnRetryAiIndex|aiQuestionInput|aiIndexStatus|btnNavPrev|btnNavNext|progressSlider)" frontend/app.js
+```
+
+本线已知的引用点（行号为改动前实测值，清掉前面的会偏移）：
+
+| 行 | 内容 | 处理 |
+|---|---|---|
+| 135、139、143–148、177–178 | dom 引用块里这些元素的条目 | 删除条目 |
+| 5406–5428 | AI 面板的 7 处 `addEventListener` | 删除 |
+| 5489、5497 | `dom.progressSlider` 的 input/change 绑定 | 删除 |
+| 5573、5578 | `dom.btnNavPrev/Next` 的 click 绑定 | 删除 |
+| 696、846、857、874、4069、4076 | `dom.aiPanel.classList` 的面板互斥分支 | 删除这些分支（AI 面板不再属于面板集合） |
+| 834 | `dom.btnToggleAi.setAttribute` | 删除 |
+| 1937、1990、2070、2317、2325、2331、2342、2346、2367、2372、3830 | `dom.progressSlider` 的启用/禁用/取值 | 删除滑块相关语句；**保留**同一函数里 `dom.progressText` / `dom.pageText` 的读写 |
+| 2213–2214 | `dom.btnNavPrev/Next` 的 disabled（已有 null 守卫） | 删除 |
+
+两条规则：
+
+1. **删引用，不删功能。** 被删元素承载的行为若用户仍需要，接到 v2 的对应实现上。进度读数不需要新代码：v2 的标记里 `#progress-text` / `#page-text` 已存在（在目录面板内），本线的 `dom.progressText` / `dom.pageText` 引用与写入逻辑原样可用。
+2. **AI 问答整条链路的函数体删除留给 Task 7**，本步只清引用点，保证不运行时抛错。
+
+清完复核：
+
+```bash
+grep -nE "dom\.(btnToggleAi|btnCloseAi|aiPanel|btnNavPrev|btnNavNext|progressSlider)" frontend/app.js
+```
+
+Expected: 无输出
 
 - [ ] **Step 4: 移植阅读区 CSS**
 
@@ -525,7 +557,7 @@ dom 引用（v2 的 160–170 行）：
 
 - [ ] **Step 7: 恢复已存偏好**
 
-在阅读器初始化路径上调用 v2 的恢复函数（读取 `marginalia.readerTypography`，见 `/tmp/v2-app.js` 892–927），位置与 v2 相同（阅读器初始化时）。
+v2 的恢复函数名是 **`loadReaderTypographyPreference()`**（`/tmp/v2-app.js` 895–927），在阅读器初始化时调用（v2 在 5290 行调它）。照抄函数体，并按 v2 的位置在本线的阅读器初始化路径上调用。
 
 - [ ] **Step 8: 搬入排版测试并跑**
 
@@ -768,7 +800,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 - [ ] **Step 1: 删除 AI 问答函数与调用链**
 
-以下函数在 Task 3 之后已无 DOM 可依，全部删除（v2 在 `ed90dd0` 里就是这么做的）：
+Task 3 已经清掉了这些函数的所有**引用点**（绑定、dom 引用、面板互斥分支），所以现在它们是一批没人调用的死代码。以下函数体全部删除（v2 在 `ed90dd0` 里就是这么做的）：
 
 `addAiMessage`、`askBookQuestion`、`collectBookQaContext`、`createAiConversation`、`deleteCurrentAiConversation`、`jumpToAiCitation`、`loadAiConversations`、`loadAiMessages`、`renderAiConversationOptions`、`renderAiMessages`、`setAiIndexState`、`toggleAiPanel`、`formatKnowledgeStatus`，以及它们在 dom 引用块、事件绑定块中的引用。
 
