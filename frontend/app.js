@@ -646,7 +646,7 @@
       setActiveNav('read');
       syncReaderToolStates();
       syncReaderPanelBackdrop();
-      if (currentRendition && isMobileLayout()) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
+      if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
       return;
     }
 
@@ -828,7 +828,13 @@
     if (!readerChromeAutoHideEnabled) return;
     if (!dom.readerView.classList.contains('active') || hasOpenReaderSurface()) return;
     if (pendingSelection || !dom.selectionToolbar.hidden) return;
-    setReaderChromeVisible(!readerChromeVisible, { autoHide: !readerChromeVisible });
+    if (readerChromeVisible) {
+      if (isMobileLayout()) scheduleReaderChromeHide();
+      else setReaderChromeVisible(false);
+    } else {
+      cancelReaderChromeHide();
+      setReaderChromeVisible(true);
+    }
   }
 
   function updateReaderChromeAutoHideUI() {
@@ -5966,12 +5972,15 @@
     mobileLayoutMedia.addEventListener('change', () => {
       dom.notesPanel.classList.remove('open');
       document.body.classList.remove('reader-panel-open');
+      cancelReaderChromeHoverClose();
       cancelReaderNavigatorHoverClose();
+      cancelReaderNotesHoverClose();
+      setReaderChromeVisible(isMobileLayout());
       setReaderNavigatorOpen(false);
-      resetReaderChrome();
+      toggleNotesPanel(false);
       syncReaderPanelBackdrop();
       refreshReaderLayout();
-      if (dom.readerView.classList.contains('active')) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
+      if (dom.readerView.classList.contains('active') && isMobileLayout()) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {

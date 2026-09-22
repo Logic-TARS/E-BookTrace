@@ -157,21 +157,12 @@ test.describe('visual polish structure', () => {
     await installNotesApiRoutes(page, { notes: [] });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/index.html');
-    // Wait for the page to stabilize
-    await page.waitForTimeout(500);
+    // Wait for the app to finish initialization before overriding DOM state
+    await expect(page.locator('#library-view')).toHaveClass(/active/, { timeout: 10000 });
     await page.evaluate(() => {
       document.querySelector('#library-view').classList.remove('active');
       document.querySelector('#reader-view').classList.add('active');
-      document.querySelector('#reader-view').classList.remove('reader-chrome-hidden');
       document.body.classList.add('reader-active');
-      document.body.classList.remove('reader-chrome-hidden');
-      // Force the toolbar to be visible
-      const toolbar = document.querySelector('.reader-toolbar');
-      if (toolbar) {
-        toolbar.style.visibility = '';
-        toolbar.style.opacity = '';
-        toolbar.style.display = '';
-      }
       const danger = document.createElement('button');
       danger.id = 'reader-danger-probe';
       danger.className = 'btn btn-danger';
