@@ -93,7 +93,7 @@ DB_PATH = _resolve_db_path()
 - [ ] **Step 5: 验证 DATABASE_URL 真的生效**
 
 ```bash
-cd backend && DATABASE_URL="sqlite+aiosqlite:///$(pwd)/../.tmp-scratch.db" ../.venv/Scripts/python.exe -c "import database; print(database.DB_PATH)"
+cd backend && DATABASE_URL="sqlite+aiosqlite:///$(pwd)/../.tmp-scratch.db" ../../../.venv/Scripts/python.exe -c "import database; print(database.DB_PATH)"
 ```
 
 Expected: 打印以 `.tmp-scratch.db` 结尾的路径。**若不是**（仍打印 `backend/data/marginalia.db`），说明修复没生效，停下来修好再继续 —— 否则后续任何 scratch 库验证都会写进真实书库。
@@ -134,9 +134,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 ```bash
 mkdir -p frontend/book-chat
-cp "$TEMP/marginalia-bookchat-backup-20260922/app.js"   frontend/book-chat/app.js
-cp "$TEMP/marginalia-bookchat-backup-20260922/index.html" frontend/book-chat/index.html
-cp "$TEMP/marginalia-bookchat-backup-20260922/style.css"  frontend/book-chat/style.css
+BK="/c/Users/Family/AppData/Local/Temp/marginalia-bookchat-backup-20260922"
+cp "$BK/app.js"   frontend/book-chat/app.js
+cp "$BK/index.html" frontend/book-chat/index.html
+cp "$BK/style.css"  frontend/book-chat/style.css
 wc -l frontend/book-chat/*        # 预期 1100 行上下，三文件非空
 ```
 
