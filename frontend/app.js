@@ -37,6 +37,7 @@
   let currentBookUrl = null;    // blob URL for current EPUB (for cleanup)
   let currentChapter = '';
   let currentCfi = '';
+  let currentChapterId = '';
   let pendingSelection = null;  // { cfiRange, text } from last selection
   let locationsReadyPromise = null;
   let locationsReadyBook = null;
@@ -98,6 +99,7 @@
   let readerChromeAutoHideEnabled = true;
   let readerChromeHideTimer = null;
   let readerChromeLayoutTimer = null;
+  let readerNavigatorHoverCloseTimer = null;
   let readerIframeObserver = null;
   let currentRoute = null;
   let routeTransition = Promise.resolve();
@@ -143,6 +145,11 @@
     btnOperationRetry: $('#btn-operation-retry'),
     btnOperationClose: $('#btn-operation-close'),
     epubContainer: $('#epub-container'),
+    readerNavigator: $('#reader-navigator'),
+    tocList: $('#toc-list'),
+    btnToggleNavigator: $('#btn-toggle-navigator'),
+    btnCloseNavigator: $('#btn-close-navigator'),
+    btnRevealNavigator: $('#btn-reveal-navigator'),
     notesPanel: $('#notes-panel'),
     btnCloseNotesPanel: $('#btn-close-notes-panel'),
     readerPanelBackdrop: $('#reader-panel-backdrop'),
@@ -667,6 +674,7 @@
     dom.epubContainer.style.display = '';
     currentCfi = '';
     currentChapter = '';
+    currentChapterId = '';
     pendingSelection = null;
     progressJumpToken = 0;
     _boundIframeDocuments = new WeakSet();
@@ -717,6 +725,7 @@
 
   function hasOpenReaderSurface() {
     return !dom.readerToolPanel.hidden ||
+      !dom.readerNavigator.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden ||
       !dom.noteModal.hidden ||
@@ -853,6 +862,9 @@
     if (dom.btnReaderTools) {
       dom.btnReaderTools.setAttribute('aria-expanded', String(!dom.readerToolPanel.hidden));
     }
+    if (dom.btnToggleNavigator) {
+      dom.btnToggleNavigator.setAttribute('aria-expanded', String(!dom.readerNavigator.classList.contains('collapsed')));
+    }
     if (dom.btnToggleNotes) {
       dom.btnToggleNotes.setAttribute('aria-expanded', String(!dom.notesPanel.classList.contains('collapsed')));
     }
@@ -863,6 +875,7 @@
 
   function syncReaderPanelBackdrop() {
     const hasOpenPanel = isMobileLayout() && dom.readerView.classList.contains('active') && (
+      !dom.readerNavigator.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden
     );
@@ -872,6 +885,12 @@
 
   function closeOtherMobileReaderPanels(except) {
     if (!isMobileLayout()) return;
+    if (except !== 'navigator') {
+      dom.readerNavigator.classList.remove('open');
+      dom.readerNavigator.classList.add('collapsed');
+      dom.readerNavigator.setAttribute('aria-hidden', 'true');
+      dom.readerView.classList.remove('navigator-open');
+    }
     if (except !== 'notes') {
       dom.notesPanel.classList.remove('open');
       dom.notesPanel.classList.add('collapsed');
@@ -887,6 +906,7 @@
   function closeMobileReaderPanels({ restoreFocus = false } = {}) {
     if (!isMobileLayout()) return false;
     const hadOpenPanel =
+      !dom.readerNavigator.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden;
     closeOtherMobileReaderPanels('');
@@ -915,6 +935,164 @@
 
   function toggleReaderTools() {
     setReaderToolsOpen(dom.readerToolPanel.hidden);
+  }
+
+  // ==================== READER NAVIGATOR ====================
+
+  function normalizeReaderHref(value) {
+    const href = String(value || '').split('#', 1)[0].replace(/^\.\//, '');
+    try {
+      return decodeURIComponent(href);
+    } catch (_err) {
+      return href;
+    }
+  }
+
+  function renderTableOfContents(items) {
+    if (!dom.tocList) return;
+    const toc = Array.isArray(items) ? items : [];
+    dom.tocList.innerHTML = '';
+    if (!toc.length) {
+      dom.tocList.innerHTML = '<div class="empty-toc">本书没有可用目录</div>';
+      return;
+    }
+
+    const appendItems = (entries, depth = 0) => {
+      for (const item of entries) {
+        const href = String(item.href || '');
+        const label = String(item.label || item.title || '未命名章节').trim();
+        if (href) {
+          const button = document.createElement('button');
+          button.className = 'toc-item';
+          button.type = 'button';
+          button.dataset.href = normalizeReaderHref(href);
+          button.style.setProperty('--toc-depth', String(Math.min(depth, 5)));
+          button.textContent = label;
+          button.title = label;
+          button.addEventListener('click', () => gotoTocItem(item));
+          dom.tocList.appendChild(button);
+        }
+        const children = item.subitems || item.children || [];
+        if (Array.isArray(children) && children.length) appendItems(children, depth + 1);
+      }
+    };
+    appendItems(toc);
+  }
+
+  function updateTocActiveState(href) {
+    if (!dom.tocList) return;
+    const currentHref = normalizeReaderHref(href);
+    let activeButton = null;
+    for (const button of dom.tocList.querySelectorAll('.toc-item')) {
+      const itemHref = normalizeReaderHref(button.dataset.href);
+      const active = Boolean(currentHref && itemHref && (
+        currentHref === itemHref || currentHref.endsWith('/' + itemHref) || itemHref.endsWith('/' + currentHref)
+      ));
+      button.classList.toggle('active', active);
+      if (active) {
+        button.setAttribute('aria-current', 'location');
+        activeButton = button;
+      } else {
+        button.removeAttribute('aria-current');
+      }
+    }
+    if (activeButton && !dom.readerNavigator.classList.contains('collapsed')) {
+      activeButton.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  async function gotoTocItem(item) {
+    if (!currentRendition || !item || !item.href) return;
+    try {
+      await currentRendition.display(item.href);
+    } catch (err) {
+      console.warn('Failed to navigate to chapter:', err);
+      showToast('无法打开该章节', 'warning');
+      return;
+    }
+
+    await new Promise(resolve => window.setTimeout(resolve, 40));
+    const location = currentRendition.currentLocation();
+    if (location && location.start) handleLocationChange(location);
+    const targetSection = currentBook && currentBook.spine && currentBook.spine.get(item.href);
+    const targetHref = normalizeReaderHref(item.href);
+    const locationHref = location && location.start && normalizeReaderHref(location.start.href);
+    let anchorCfi = location && location.start && location.start.cfi &&
+      (locationHref === targetHref || locationHref.endsWith('/' + targetHref) || targetHref.endsWith('/' + locationHref))
+      ? location.start.cfi
+      : '';
+    if ((!anchorCfi || normalizeReaderHref(currentChapterId) !== targetHref) && targetSection) {
+      try {
+        await targetSection.load(currentBook.load.bind(currentBook));
+        if (typeof targetSection.cfiFromElement === 'function' && targetSection.document && targetSection.document.body) {
+          anchorCfi = targetSection.cfiFromElement(targetSection.document.body);
+        }
+      } catch (err) {
+        console.warn('Chapter anchor could not be resolved:', err);
+      }
+    }
+    if (!anchorCfi) anchorCfi = getCurrentAnchorCfi();
+    if (anchorCfi && currentBookMeta) {
+      const percent = getLocationCount(currentRendition.book && currentRendition.book.locations) > 0
+        ? percentageFromCfi(anchorCfi)
+        : null;
+      try {
+        await persistReaderProgress(anchorCfi, percent, { force: true });
+      } catch (err) {
+        console.warn('Chapter opened but its position could not be saved:', err);
+        showToast('章节已打开，当前位置将在稍后重试保存', 'warning');
+      }
+    }
+    if (isMobileLayout()) setReaderNavigatorOpen(false);
+  }
+
+  function setReaderNavigatorOpen(open, { restoreFocus = false } = {}) {
+    const shouldOpen = Boolean(open);
+    if (shouldOpen) {
+      if (isMobileLayout()) {
+        setReaderChromeVisible(true);
+        cancelReaderChromeHide();
+      }
+      closeOtherMobileReaderPanels('navigator');
+      if (isMobileLayout()) {
+        setReaderToolsOpen(false, { skipChromeSchedule: true });
+      }
+    }
+    dom.readerNavigator.classList.toggle('open', shouldOpen);
+    dom.readerNavigator.classList.toggle('collapsed', !shouldOpen);
+    dom.readerNavigator.setAttribute('aria-hidden', String(!shouldOpen));
+    dom.readerView.classList.toggle('navigator-open', shouldOpen);
+    syncReaderToolStates();
+    syncReaderPanelBackdrop();
+    if (!shouldOpen) {
+      if (restoreFocus) safeFocus(dom.btnToggleNavigator);
+      scheduleReaderChromeHide();
+    }
+  }
+
+  function toggleReaderNavigator() {
+    setReaderNavigatorOpen(dom.readerNavigator.classList.contains('collapsed'));
+  }
+
+  function cancelReaderNavigatorHoverClose() {
+    if (!readerNavigatorHoverCloseTimer) return;
+    clearTimeout(readerNavigatorHoverCloseTimer);
+    readerNavigatorHoverCloseTimer = null;
+  }
+
+  function openReaderNavigatorOnHover() {
+    if (isMobileLayout()) return;
+    cancelReaderNavigatorHoverClose();
+    setReaderNavigatorOpen(true);
+  }
+
+  function scheduleReaderNavigatorHoverClose() {
+    if (isMobileLayout()) return;
+    cancelReaderNavigatorHoverClose();
+    readerNavigatorHoverCloseTimer = setTimeout(() => {
+      readerNavigatorHoverCloseTimer = null;
+      setReaderNavigatorOpen(false);
+    }, 160);
   }
 
   // ==================== LIBRARY ====================
@@ -1944,10 +2122,12 @@
 
       // Load bookmarks/navigation for chapter titles
       book.loaded.navigation.then((nav) => {
-        // nav.toc gives us chapter structure
-        if (nav.toc && nav.toc.length > 0) {
-          currentBook._toc = nav.toc;
-        }
+        currentBook._toc = Array.isArray(nav.toc) ? nav.toc : [];
+        renderTableOfContents(currentBook._toc);
+        updateTocActiveState(currentChapterId);
+      }).catch((err) => {
+        console.warn('EPUB navigation load failed:', err);
+        renderTableOfContents([]);
       });
 
       dom.epubContainer.style.display = '';
@@ -1980,6 +2160,9 @@
   function handleLocationChange(location) {
     if (!location || !location.start) return;
     currentCfi = location.start.cfi;
+    const nextChapterId = String(location.start.href || '').split('#', 1)[0];
+    if (nextChapterId) currentChapterId = nextChapterId;
+    updateTocActiveState(location.start.href || '');
     let percent = location.start.percentage;
     if (percent == null) {
       percent = percentageFromCfi(currentCfi);
@@ -5547,6 +5730,16 @@
     // Reader tools
     dom.btnReaderTools.addEventListener('click', toggleReaderTools);
     dom.btnRevealReaderChrome.addEventListener('click', () => revealReaderChromeTemporarily());
+    dom.btnToggleNavigator.addEventListener('click', toggleReaderNavigator);
+    dom.btnCloseNavigator.addEventListener('click', () => setReaderNavigatorOpen(false, { restoreFocus: true }));
+    dom.btnRevealNavigator.addEventListener('click', () => setReaderNavigatorOpen(true));
+    [dom.btnRevealNavigator, dom.readerNavigator].forEach((element) => {
+      if (!element) return;
+      element.addEventListener('pointerenter', openReaderNavigatorOnHover);
+      element.addEventListener('pointerleave', scheduleReaderNavigatorHoverClose);
+      element.addEventListener('focusin', openReaderNavigatorOnHover);
+      element.addEventListener('focusout', scheduleReaderNavigatorHoverClose);
+    });
     dom.btnOperationClose.addEventListener('click', () => hideOperationStatus());
     dom.btnOperationRetry.addEventListener('click', async () => {
       if (!operationBookId) return;
@@ -5689,6 +5882,8 @@
     mobileLayoutMedia.addEventListener('change', () => {
       dom.notesPanel.classList.remove('open');
       document.body.classList.remove('reader-panel-open');
+      cancelReaderNavigatorHoverClose();
+      setReaderNavigatorOpen(false);
       resetReaderChrome();
       syncReaderPanelBackdrop();
       refreshReaderLayout();
