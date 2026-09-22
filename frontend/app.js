@@ -130,7 +130,6 @@
     libraryView: $('#library-view'),
     readerView: $('#reader-view'),
     readerToolbar: $('.reader-toolbar'),
-    readerFooter: $('.reader-footer'),
     readerMain: $('.reader-main'),
     bookList: $('#book-list'),
     emptyLibrary: $('#empty-library'),
@@ -771,7 +770,6 @@
     dom.readerView.classList.toggle('reader-chrome-hidden', !shouldShow);
     document.body.classList.toggle('reader-chrome-hidden', !shouldShow && readerIsActive);
     setChromeElementHidden(dom.readerToolbar, !shouldShow);
-    setChromeElementHidden(dom.readerFooter, !shouldShow);
     setChromeElementHidden(dom.appNav, !shouldShow && readerIsActive);
 
     if (changed) refreshLayoutAfterChromeChange();
@@ -2681,42 +2679,6 @@
       });
 
     return locationsReadyPromise;
-  }
-
-  async function jumpToProgress(percent) {
-    if (!currentRendition || !currentRendition.book || !currentRendition.book.locations) return;
-    releaseTransferredProgressFloor();
-    const jumpToken = ++progressJumpToken;
-
-    try {
-      const locations = currentRendition.book.locations;
-      dom.progressText.textContent = getLocationCount(locations) > 0 ? '跳转中...' : '定位中...';
-      setReaderLoading('正在跳转...', '正在定位目标位置');
-      await warmLocationsWithProgress(currentRendition.book);
-      if (jumpToken !== progressJumpToken) return;
-
-      const cfiResult = locations.cfiFromPercentage(percent);
-      const cfi = cfiResult && typeof cfiResult.then === 'function'
-        ? await cfiResult
-        : cfiResult;
-      if (jumpToken !== progressJumpToken) return;
-
-      if (cfi) {
-        await currentRendition.display(cfi);
-        if (jumpToken === progressJumpToken) updateProgressUI();
-      } else {
-        showToast('暂时无法跳转到该位置', 'warning');
-        updateProgressUI();
-      }
-    } catch (err) {
-      console.warn('Progress jump failed:', err);
-      showToast('进度跳转失败', 'error');
-      updateProgressUI();
-    } finally {
-      if (jumpToken === progressJumpToken) {
-        hideReaderLoading();
-      }
-    }
   }
 
   // ==================== IFRAME NAVIGATION ====================

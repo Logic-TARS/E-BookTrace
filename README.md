@@ -39,7 +39,7 @@ EMBEDDING_API_KEY=ollama
 EMBEDDING_MODEL=qwen3-embedding:0.6b
 ```
 
-导入 EPUB 后，后端会异步建立全文向量索引。`/book-chat/` 提供书籍问答界面，支持严格依据原文回答、连续追问、来源引用和跳转原文。后端 `/api/knowledge/*` 接口保留以兼容既有数据与调用方。
+导入 EPUB 后，后端会异步建立全文向量索引。`/book-chat/` 提供 GPT 风格阅读界面（共享书库、本地全文搜索、阅读进度同步）。`/api/knowledge/*` 接口仅保留在后端、当前没有前端调用方。
 
 也可以通过 API 直接调用历史接口：
 

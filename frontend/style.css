@@ -1956,6 +1956,7 @@ body.reader-active .operation-status {
   backdrop-filter: blur(8px);
   opacity: 0;
   pointer-events: none;
+  visibility: hidden;
   transform: translate(-50%, -8px);
   transition: opacity var(--transition-fast), transform var(--transition-fast);
   cursor: pointer;
@@ -1965,6 +1966,7 @@ body.reader-active .operation-status {
 body.reader-chrome-hidden .reader-chrome-reveal {
   opacity: 1;
   pointer-events: auto;
+  visibility: visible;
   transform: translate(-50%, 0);
 }
 
