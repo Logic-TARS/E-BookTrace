@@ -43,6 +43,7 @@ test.describe('reader navigator', () => {
     await page.locator('#btn-add-bookmark').click();
     await openNavigator(page);
     await expect(page.locator('#reader-navigator #bookmarks-list')).toBeVisible();
+    await expect(page.locator('#reader-navigator #bookmarks-list .bookmark-item')).toHaveCount(1);
     // Opening the navigator closes the tool panel; reopen it to access the notes toggle
     if (await page.locator('#reader-tool-panel').isHidden()) {
       await page.locator('#btn-reader-tools').click();
