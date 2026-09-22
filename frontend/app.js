@@ -788,6 +788,9 @@
     return true;
   }
 
+  // NOTE: 本线刻意不带 v2 的 `if (!isMobileLayout()) return;` 守卫。
+  // 桌面端进入阅读器后的初始收起（openBook → renderRoute → scheduleReaderChromeHide(2400ms)）
+  // 依赖此函数在桌面也生效；新增调用者若只想在移动端安排收起，需自行加守卫。
   function scheduleReaderChromeHide(delay = READER_CHROME_AUTO_HIDE_MS) {
     cancelReaderChromeHide();
     if (!canAutoHideReaderChrome()) return;
