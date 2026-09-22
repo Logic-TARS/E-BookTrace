@@ -26,7 +26,7 @@ API 运行在 `http://localhost:8720`，浏览器打开这个地址即可使用�
 - 点击划线可以写感悟、加标签。
 - 点击「同步」保存到后端素材库。
 
-### 3. AI 问答（可选）
+### 3. 书籍问答 API（后端）
 
 在 `.env` 中配置 OpenAI 兼容的 LLM 接口：
 
@@ -39,7 +39,7 @@ EMBEDDING_API_KEY=ollama
 EMBEDDING_MODEL=qwen3-embedding:0.6b
 ```
 
-导入 EPUB 后，后端会异步建立全文向量索引。阅读面板中的「AI 问答」支持严格依据原文回答、连续追问、来源引用和跳转原文。当前运行界面不提供稿件生成入口；历史生成接口仍保留以兼容既有数据与调用方。
+导入 EPUB 后，后端会异步建立全文向量索引。`/book-chat/` 提供书籍问答界面，支持严格依据原文回答、连续追问、来源引用和跳转原文。后端 `/api/knowledge/*` 接口保留以兼容既有数据与调用方。
 
 也可以通过 API 直接调用历史接口：
 
@@ -74,9 +74,9 @@ OBSIDIAN_VAULT_PATH=/path/to/your/obsidian/vault
 
 ```text
 frontend/          PWA 阅读器 (epub.js + IndexedDB + vanilla JS)
-  app.js           三视图：书库、阅读、笔记管理
+  app.js           书库、阅读、笔记管理视图
                    笔记搜索、筛选、批量操作、回收站与 Markdown 导出
-                   AI 问答与 EPUB 阅读
+                   排版面板、目录与书签
 backend/           FastAPI
   main.py          路由：health、highlights CRUD、drafts CRUD、script、obsidian export、books
   models.py        Pydantic 数据模型
@@ -94,7 +94,7 @@ docs/              架构文档
 | 视图 | 功能 |
 |------|------|
 | **书库** | 导入 EPUB、浏览书籍、进入笔记管理 |
-| **阅读** | EPUB 阅读、划线标注、写感悟、全文搜索、AI 问答、书签 |
+| **阅读** | EPUB 阅读、划线标注、写感悟、全文搜索、书签、排版面板、目录 |
 | **笔记管理** | 搜索筛选、标签/颜色编辑、批量操作、回收站与 Markdown 导出 |
 
 ## 环境变量
