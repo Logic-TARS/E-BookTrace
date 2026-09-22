@@ -81,6 +81,7 @@
   let fontZoomResetTimer = null;
   let searchResultsList = [];
   let searchHighlightKeys = [];
+  let aiIndexPollTimer = null;
   let pendingBookDelete = null;
   let lastDialogTrigger = null;
   const knowledgeUploadsInFlight = new Set();
