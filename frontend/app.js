@@ -99,7 +99,9 @@
   let readerChromeAutoHideEnabled = true;
   let readerChromeHideTimer = null;
   let readerChromeLayoutTimer = null;
+  let readerChromeHoverCloseTimer = null;
   let readerNavigatorHoverCloseTimer = null;
+  let readerNotesHoverCloseTimer = null;
   let readerIframeObserver = null;
   let currentRoute = null;
   let routeTransition = Promise.resolve();
@@ -152,6 +154,7 @@
     btnRevealNavigator: $('#btn-reveal-navigator'),
     notesPanel: $('#notes-panel'),
     btnCloseNotesPanel: $('#btn-close-notes-panel'),
+    btnRevealNotes: $('#btn-reveal-notes'),
     readerPanelBackdrop: $('#reader-panel-backdrop'),
     bookmarksList: $('#bookmarks-list'),
     bookmarksCount: $('#bookmarks-count'),
@@ -643,7 +646,7 @@
       setActiveNav('read');
       syncReaderToolStates();
       syncReaderPanelBackdrop();
-      if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
+      if (currentRendition && isMobileLayout()) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
       return;
     }
 
@@ -795,8 +798,30 @@
   }
 
   function revealReaderChromeTemporarily() {
+    cancelReaderChromeHoverClose();
     setReaderChromeVisible(true);
-    scheduleReaderChromeHide();
+    if (isMobileLayout()) scheduleReaderChromeHide();
+  }
+
+  function cancelReaderChromeHoverClose() {
+    if (!readerChromeHoverCloseTimer) return;
+    clearTimeout(readerChromeHoverCloseTimer);
+    readerChromeHoverCloseTimer = null;
+  }
+
+  function openReaderChromeOnHover() {
+    if (isMobileLayout()) return;
+    cancelReaderChromeHoverClose();
+    setReaderChromeVisible(true);
+  }
+
+  function scheduleReaderChromeHoverClose() {
+    if (isMobileLayout()) return;
+    cancelReaderChromeHoverClose();
+    readerChromeHoverCloseTimer = setTimeout(() => {
+      readerChromeHoverCloseTimer = null;
+      setReaderChromeVisible(false);
+    }, 160);
   }
 
   function toggleReaderChromeFromContent() {
@@ -846,16 +871,19 @@
 
   function resetReaderChrome() {
     cancelReaderChromeHide();
+    cancelReaderChromeHoverClose();
+    cancelReaderNavigatorHoverClose();
+    cancelReaderNotesHoverClose();
     if (readerChromeLayoutTimer) {
       clearTimeout(readerChromeLayoutTimer);
       readerChromeLayoutTimer = null;
     }
-    readerChromeVisible = true;
-    dom.readerView.classList.remove('reader-chrome-hidden');
-    document.body.classList.remove('reader-chrome-hidden');
-    setChromeElementHidden(dom.readerToolbar, false);
-    setChromeElementHidden(dom.readerFooter, false);
-    setChromeElementHidden(dom.appNav, false);
+    setReaderChromeVisible(true);
+    setReaderNavigatorOpen(false);
+    toggleNotesPanel(false);
+    syncReaderPanelBackdrop();
+    refreshReaderLayout();
+    if (dom.readerView.classList.contains('active') && isMobileLayout()) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
   }
 
   function syncReaderToolStates() {
@@ -895,6 +923,7 @@
       dom.notesPanel.classList.remove('open');
       dom.notesPanel.classList.add('collapsed');
       dom.readerMain.classList.add('notes-collapsed');
+      dom.readerView.classList.remove('notes-open');
     }
     if (except !== 'search') {
       dom.searchPanel.hidden = true;
@@ -3826,7 +3855,21 @@
     const clientRects = typeof range.getClientRects === 'function'
       ? Array.from(range.getClientRects()).filter(item => item.width || item.height)
       : [];
-    const rect = clientRects[clientRects.length - 1] || range.getBoundingClientRect();
+    const boundingRect = range.getBoundingClientRect();
+    const anchorRect = clientRects[0] || boundingRect;
+    const selectionBounds = clientRects.length
+      ? clientRects.reduce((bounds, item) => ({
+        top: Math.min(bounds.top, item.top),
+        right: Math.max(bounds.right, item.right),
+        bottom: Math.max(bounds.bottom, item.bottom),
+        left: Math.min(bounds.left, item.left),
+      }), {
+        top: clientRects[0].top,
+        right: clientRects[0].right,
+        bottom: clientRects[0].bottom,
+        left: clientRects[0].left,
+      })
+      : boundingRect;
     const frameRect = iframe ? iframe.getBoundingClientRect() : null;
     const toolbar = dom.selectionToolbar;
     const wasHidden = toolbar.hidden;
@@ -3836,9 +3879,11 @@
       toolbar.style.visibility = 'hidden';
     }
 
-    const selectionTop = rect.top + (frameRect ? frameRect.top : 0);
-    const selectionBottom = rect.bottom + (frameRect ? frameRect.top : 0);
-    const selectionLeft = rect.left + (frameRect ? frameRect.left : 0);
+    const frameTop = frameRect ? frameRect.top : 0;
+    const frameLeft = frameRect ? frameRect.left : 0;
+    const selectionTop = selectionBounds.top + frameTop;
+    const selectionBottom = selectionBounds.bottom + frameTop;
+    const anchorLeft = anchorRect.left + frameLeft;
     const visualViewport = window.visualViewport;
     const viewportTop = visualViewport ? visualViewport.offsetTop : 0;
     const viewportLeft = visualViewport ? visualViewport.offsetLeft : 0;
@@ -3847,7 +3892,7 @@
     const edgeGap = 8;
 
     let top = selectionTop - toolbar.offsetHeight - edgeGap;
-    let left = selectionLeft + (rect.width / 2) - (toolbar.offsetWidth / 2);
+    let left = anchorLeft + (anchorRect.width / 2) - (toolbar.offsetWidth / 2);
 
     // Keep the controls inside the visual viewport, including when the soft
     // keyboard is open or the page is running as an installed PWA.
@@ -4377,18 +4422,42 @@
       ? forceOpen
       : dom.notesPanel.classList.contains('collapsed');
     if (shouldOpen) {
-      setReaderChromeVisible(true);
-      cancelReaderChromeHide();
+      if (isMobileLayout()) {
+        setReaderChromeVisible(true);
+        cancelReaderChromeHide();
+      }
       closeOtherMobileReaderPanels('notes');
       if (isMobileLayout()) setReaderToolsOpen(false, { skipChromeSchedule: true });
     }
     dom.notesPanel.classList.toggle('open', shouldOpen && isMobileLayout());
     dom.notesPanel.classList.toggle('collapsed', !shouldOpen);
     dom.readerMain.classList.toggle('notes-collapsed', !shouldOpen);
-    refreshReaderLayout();
+    dom.readerView.classList.toggle('notes-open', shouldOpen);
+    if (isMobileLayout()) refreshReaderLayout();
     syncReaderToolStates();
     syncReaderPanelBackdrop();
     if (!shouldOpen) scheduleReaderChromeHide();
+  }
+
+  function cancelReaderNotesHoverClose() {
+    if (!readerNotesHoverCloseTimer) return;
+    clearTimeout(readerNotesHoverCloseTimer);
+    readerNotesHoverCloseTimer = null;
+  }
+
+  function openReaderNotesOnHover() {
+    if (isMobileLayout()) return;
+    cancelReaderNotesHoverClose();
+    toggleNotesPanel(true);
+  }
+
+  function scheduleReaderNotesHoverClose() {
+    if (isMobileLayout()) return;
+    cancelReaderNotesHoverClose();
+    readerNotesHoverCloseTimer = setTimeout(() => {
+      readerNotesHoverCloseTimer = null;
+      toggleNotesPanel(false);
+    }, 160);
   }
 
   function toggleAiPanel(forceOpen) {
@@ -5604,18 +5673,25 @@
 
   // ==================== EVENT BINDINGS ====================
   function bindEvents() {
-    [dom.readerToolbar, dom.readerFooter, dom.readerToolPanel, dom.appNav].forEach((element) => {
+    [dom.btnRevealReaderChrome, dom.readerToolbar, dom.readerToolPanel].forEach((element) => {
+      if (!element) return;
+      element.addEventListener('pointerenter', openReaderChromeOnHover);
+      element.addEventListener('pointerleave', scheduleReaderChromeHoverClose);
+      element.addEventListener('focusin', openReaderChromeOnHover);
+      element.addEventListener('focusout', scheduleReaderChromeHoverClose);
+    });
+
+    [dom.readerToolbar, dom.readerToolPanel].forEach((element) => {
       if (!element) return;
       element.addEventListener('pointerdown', () => {
         if (!dom.readerView.classList.contains('active')) return;
         setReaderChromeVisible(true);
         cancelReaderChromeHide();
+        cancelReaderChromeHoverClose();
       });
       element.addEventListener('click', () => {
-        setTimeout(() => scheduleReaderChromeHide(), 0);
+        if (isMobileLayout()) setTimeout(() => scheduleReaderChromeHide(), 0);
       });
-      element.addEventListener('focusin', () => cancelReaderChromeHide());
-      element.addEventListener('focusout', () => setTimeout(() => scheduleReaderChromeHide(), 0));
     });
 
     dom.btnNavLibrary.addEventListener('click', () => requestNotesNavigation(showLibrary));
@@ -5750,6 +5826,14 @@
     // Toggle notes panel
     dom.btnAddBookmark.addEventListener('click', addBookmark);
     dom.btnToggleNotes.addEventListener('click', () => toggleNotesPanel());
+    dom.btnRevealNotes.addEventListener('click', () => toggleNotesPanel(true));
+    [dom.btnRevealNotes, dom.notesPanel].forEach((element) => {
+      if (!element) return;
+      element.addEventListener('pointerenter', openReaderNotesOnHover);
+      element.addEventListener('pointerleave', scheduleReaderNotesHoverClose);
+      element.addEventListener('focusin', openReaderNotesOnHover);
+      element.addEventListener('focusout', scheduleReaderNotesHoverClose);
+    });
     dom.btnToggleReaderAutoHide.addEventListener('click', () => {
       setReaderChromeAutoHideEnabled(!readerChromeAutoHideEnabled);
     });
@@ -5912,6 +5996,7 @@
 
     loadReaderChromeAutoHidePreference();
     loadReaderTypographyPreference();
+    setReaderNavigatorOpen(false);
     observeReaderIframes();
     bindEvents();
     syncReaderToolStates();
