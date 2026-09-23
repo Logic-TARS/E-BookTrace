@@ -126,7 +126,6 @@
 
   const dom = {
     app: $('#app'),
-    appNav: $('.app-nav'),
     libraryView: $('#library-view'),
     readerView: $('#reader-view'),
     readerToolbar: $('.reader-toolbar'),
@@ -204,9 +203,6 @@
     readerLoadingProgress: $('#reader-loading-progress'),
     readerLoadingProgressBar: $('#reader-loading-progress-bar'),
     readerLoadingProgressText: $('#reader-loading-progress-text'),
-    btnNavLibrary: $('#btn-nav-library'),
-    btnNavRead: $('#btn-nav-read'),
-    btnNavCreate: $('#btn-nav-create'),
     btnLibraryCreate: $('#btn-library-create'),
     creationView: $('#creation-view'),
     btnNotesBack: $('#btn-notes-back'),
@@ -633,7 +629,6 @@
     document.body.classList.toggle('reader-active', route === '/reader');
     if (route === '/reader') {
       setReaderChromeVisible(true);
-      setActiveNav('read');
       syncReaderToolStates();
       syncReaderPanelBackdrop();
       if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
@@ -643,7 +638,6 @@
     resetReaderChrome();
     closeMobileReaderPanels();
     syncReaderPanelBackdrop();
-    setActiveNav(route === '/creation' ? 'create' : 'library');
     if (route === '/') {
       setReaderToolsOpen(false);
       hideReaderLoading();
@@ -678,12 +672,6 @@
       currentBookUrl = null;
     }
     currentBookMeta = null;
-  }
-
-  function setActiveNav(target) {
-    dom.btnNavLibrary.classList.toggle('active', target === 'library');
-    dom.btnNavRead.classList.toggle('active', target === 'read');
-    dom.btnNavCreate.classList.toggle('active', target === 'create');
   }
 
   function safeFocus(el) {
@@ -770,7 +758,6 @@
     dom.readerView.classList.toggle('reader-chrome-hidden', !shouldShow);
     document.body.classList.toggle('reader-chrome-hidden', !shouldShow && readerIsActive);
     setChromeElementHidden(dom.readerToolbar, !shouldShow);
-    setChromeElementHidden(dom.appNav, !shouldShow && readerIsActive);
 
     if (changed) refreshLayoutAfterChromeChange();
     if (shouldShow && autoHide) scheduleReaderChromeHide();
@@ -5303,16 +5290,6 @@
       });
     });
 
-    dom.btnNavLibrary.addEventListener('click', () => requestNotesNavigation(showLibrary));
-    dom.btnNavRead.addEventListener('click', () => requestNotesNavigation(() => {
-      if (currentBookMeta && currentRendition) {
-        return navigateToRoute('/reader');
-      }
-      return showLibrary().then(() => {
-        showToast('请先从书库打开一本书', 'info');
-      });
-    }));
-    dom.btnNavCreate.addEventListener('click', () => requestNotesNavigation(showCreation));
     dom.btnLibraryCreate.addEventListener('click', () => requestNotesNavigation(showCreation));
     dom.btnNotesBack.addEventListener('click', () => requestNotesNavigation(showLibrary));
     const notesFilterBindings = [

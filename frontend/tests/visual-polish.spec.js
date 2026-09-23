@@ -113,7 +113,7 @@ test.describe('visual polish structure', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/index.html');
     await expect(page.locator('#library-view')).toHaveClass(/active/, { timeout: 10000 });
-    await page.locator('#btn-nav-create').click();
+    await page.locator('#btn-library-create').click();
     await expect(page.locator('#creation-view')).toHaveClass(/active/, { timeout: 10000 });
     await expect(page.locator('#creation-view h1')).toHaveText('笔记管理');
     await expectNoHorizontalOverflow(page);

@@ -7,33 +7,12 @@
   <meta name="description" content="Marginalia - 阅读划线、读书感悟与笔记管理">
   <link rel="manifest" href="manifest.json">
   <title>Marginalia</title>
-  <link rel="stylesheet" href="style.css?v=34">
+  <link rel="stylesheet" href="style.css?v=35">
   <script src="jszip.min.js"></script>
   <script src="epub.min.js"></script>
 </head>
 <body>
   <div id="app" class="app-container">
-    <nav class="app-nav" aria-label="主导航">
-      <div class="brand">
-        <span class="brand-mark">M</span>
-        <div class="brand-copy">
-          <strong>Marginalia</strong>
-          <span>从阅读到沉淀</span>
-        </div>
-      </div>
-      <div class="nav-tabs">
-        <button class="nav-tab active" id="btn-nav-library" type="button">
-          <span class="nav-tab-icon" aria-hidden="true">▤</span><span>书库</span>
-        </button>
-        <button class="nav-tab" id="btn-nav-read" type="button">
-          <span class="nav-tab-icon" aria-hidden="true">◇</span><span>阅读</span>
-        </button>
-        <button class="nav-tab" id="btn-nav-create" type="button">
-          <span class="nav-tab-icon" aria-hidden="true">✎</span><span>笔记管理</span>
-        </button>
-      </div>
-    </nav>
-
     <section class="operation-status" id="operation-status" aria-live="polite" hidden>
       <div class="operation-status-copy">
         <strong id="operation-status-message">正在处理书籍…</strong>
@@ -48,11 +27,26 @@
     </section>
 
     <div id="library-view" class="view active">
+      <header class="home-nav">
+        <div class="brand">
+          <span class="brand-mark">M</span>
+          <div class="brand-copy">
+            <strong>Marginalia</strong>
+            <span>让阅读留下边注</span>
+          </div>
+        </div>
+        <span class="home-nav-label">主界面</span>
+      </header>
       <header class="library-header">
         <div class="page-heading">
           <span class="eyebrow">Library</span>
           <h1 class="app-title">你的阅读素材库</h1>
-          <p class="app-subtitle">导入 EPUB，阅读时划线，沉淀感悟，再到笔记管理集中整理。</p>
+          <p class="app-subtitle">导入 EPUB，阅读时划线，沉淀感悟，整理并导出读书笔记。</p>
+          <div class="library-flow" aria-label="阅读工作流">
+            <span><b>01</b> 安静阅读</span>
+            <span><b>02</b> 留下边注</span>
+            <span><b>03</b> 整理笔记</span>
+          </div>
         </div>
         <div class="library-actions">
           <label class="btn btn-primary import-btn">
@@ -66,9 +60,10 @@
 
       <main class="book-list" id="book-list">
         <div class="empty-state" id="empty-library">
-          <div class="empty-icon">M</div>
-          <p>还没有书</p>
-          <p class="empty-hint">导入一本 EPUB，或把 EPUB 放到 backend/data/books 后刷新页面。</p>
+          <div class="empty-icon" aria-hidden="true">M</div>
+          <p class="empty-state-title">从一本书开始</p>
+          <p class="empty-hint">导入 EPUB，把阅读、边注与感悟留在同一间数字书斋。也可把 EPUB 放到 backend/data/books 后刷新页面。</p>
+          <label class="btn btn-primary empty-import-btn" for="file-input">导入第一本书</label>
         </div>
       </main>
     </div>
@@ -425,6 +420,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="app.js?v=34"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

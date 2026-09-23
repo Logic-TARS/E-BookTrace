@@ -277,7 +277,7 @@ test.describe('@mobile mobile layout', () => {
   test('opens note detail as a mobile full-screen layer and traps dirty navigation', async ({ page }) => {
     await installNotesApiRoutes(page, { notes: [makeNote({ highlight_text: '移动测试划线' })] });
     await page.goto('/index.html');
-    await page.locator('#btn-nav-create').click();
+    await page.locator('#btn-library-create').click();
     await expect(page.locator('#creation-view')).toHaveClass(/active/);
     await expect(page.getByText('移动测试划线')).toBeVisible();
     const trigger = page.locator('.note-management-card-button');
@@ -305,17 +305,16 @@ test.describe('@mobile mobile layout', () => {
     await expect(page.locator('#library-view')).toHaveClass(/active/);
     await expectNoHorizontalOverflow(page);
 
-    const navigation = await page.locator('.app-nav').boundingBox();
-    const libraryTab = await page.locator('#btn-nav-library').boundingBox();
+    const navigation = await page.locator('.home-nav').boundingBox();
+    const libraryAction = await page.locator('#btn-library-create').boundingBox();
     const viewportHeight = await page.evaluate(() => window.innerHeight);
     expect(navigation).not.toBeNull();
-    expect(libraryTab).not.toBeNull();
-    expect(Math.abs((navigation.y + navigation.height) - viewportHeight)).toBeLessThanOrEqual(2);
-    expect(libraryTab.height).toBeGreaterThanOrEqual(44);
+    expect(libraryAction).not.toBeNull();
+    expect(navigation.y).toBeLessThanOrEqual(2);
+    expect(libraryAction.height).toBeGreaterThanOrEqual(44);
 
-    await page.locator('#btn-nav-create').click();
+    await page.locator('#btn-library-create').click();
     await expect(page.locator('#creation-view')).toHaveClass(/active/);
-    await expect(page.locator('#btn-nav-create')).toHaveClass(/active/);
     await expectNoHorizontalOverflow(page);
 
     const shellMetrics = await page.evaluate(() => {
@@ -354,18 +353,17 @@ test.describe('@mobile mobile layout', () => {
     const readerMetrics = await page.evaluate(() => {
       const host = document.querySelector('#epub-container').getBoundingClientRect();
       const toolbar = document.querySelector('.reader-toolbar').getBoundingClientRect();
-      const nav = document.querySelector('.app-nav').getBoundingClientRect();
       return {
         hostHeight: host.height,
         hostTop: host.top,
         hostBottom: host.bottom,
         toolbarBottom: toolbar.bottom,
-        navTop: nav.top,
+        viewportHeight: window.innerHeight,
       };
     });
     expect(readerMetrics.hostHeight).toBeGreaterThan(400);
     expect(readerMetrics.hostTop).toBeLessThan(readerMetrics.toolbarBottom);
-    expect(readerMetrics.hostBottom).toBeLessThanOrEqual(readerMetrics.navTop + 1);
+    expect(readerMetrics.hostBottom).toBeLessThanOrEqual(readerMetrics.viewportHeight + 1);
 
     // The v2 directory panel ships collapsed; Task 5 wires its toggling.
     await expect(page.locator('#reader-navigator')).toBeHidden();
@@ -503,21 +501,22 @@ test.describe('@mobile mobile layout', () => {
     await openFixture(page);
     const reader = page.locator('#reader-view');
     const initialHost = await page.locator('#epub-container').boundingBox();
+    const viewportHeight = await page.evaluate(() => window.innerHeight);
+    // v2 shell: no bottom nav; the reader is full-bleed from the start.
+    expect(initialHost.height).toBeGreaterThan(viewportHeight - 120);
     await expect(reader).toHaveClass(/reader-chrome-hidden/, { timeout: 6_000 });
     await expect(page.locator('.reader-toolbar')).toBeHidden();
     await expect(page.locator('.reader-footer')).toHaveCount(0);
-    await expect(page.locator('.app-nav')).toBeHidden();
     await page.waitForTimeout(350);
 
     const immersiveHost = await page.locator('#epub-container').boundingBox();
-    // Hiding the chrome drops the bottom-nav reservation, giving the reader
-    // extra room (the v2 reader has no in-flow toolbar or footer).
-    expect(immersiveHost.height).toBeGreaterThan(initialHost.height + 40);
+    // The reader stays full-bleed; auto-hide removes only the toolbar overlay.
+    expect(immersiveHost.height).toBeGreaterThan(viewportHeight - 120);
 
     await doubleTapIframeWithTouchscreen(page);
     await expect(reader).not.toHaveClass(/reader-chrome-hidden/, { timeout: 1_500 });
     await expect(page.locator('.reader-toolbar')).toBeVisible();
-    await expect(page.locator('.app-nav')).toBeVisible();
+    await expect(page.locator('#btn-reader-tools')).toBeVisible();
     await page.waitForTimeout(850);
 
     await doubleTapIframeWithTouchscreen(page);

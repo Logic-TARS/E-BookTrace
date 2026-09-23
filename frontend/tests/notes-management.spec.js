@@ -475,12 +475,14 @@ test.describe('notes management shell', () => {
     await expect(page).toHaveURL(/#\/reader$/);
 
     await page.evaluate(() => { window.__failNextBookPut = true; });
-    await page.locator('#btn-nav-create').click();
+    // v2 shell: no global tab bar. Drive the /reader → /creation transition
+    // via hash change, which exercises the same route-transition path.
+    await page.evaluate(() => { window.location.hash = '#/creation'; });
     await expect.poll(() => page.locator('#toast').textContent()).toContain('页面切换失败');
     await expect(page).toHaveURL(/#\/reader$/);
     await expect(page.locator('#reader-view')).toHaveClass(/active/);
 
-    await page.locator('#btn-nav-create').click();
+    await page.evaluate(() => { window.location.hash = '#/creation'; });
     await expect(page).toHaveURL(/#\/creation$/);
     await expect(page.locator('#creation-view')).toHaveClass(/active/);
     await expect(page.locator('#reader-view')).not.toHaveClass(/active/);
@@ -542,7 +544,11 @@ test.describe('notes management shell', () => {
     await expect(page).toHaveURL(/#\/reader$/);
     await expect(page.locator('#reader-view')).toHaveClass(/active/);
 
-    await page.locator('#btn-nav-create').click();
+    // v2 shell: from the reader, go back to the library then open notes management.
+    await page.evaluate(() => { window.location.hash = '#/'; });
+    await expect(page).toHaveURL(/#\/$/);
+    await expect(page.locator('#library-view')).toHaveClass(/active/);
+    await page.locator('#btn-library-create').click();
     await expect(page).toHaveURL(/#\/creation$/);
     await expect(page.locator('#creation-view')).toHaveClass(/active/);
   });

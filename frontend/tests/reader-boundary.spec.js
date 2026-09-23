@@ -118,7 +118,6 @@ test.describe('@smoke', () => {
     await openFixture(page);
     const reader = page.locator('#reader-view');
     await expect(reader).toHaveClass(/reader-chrome-hidden/, { timeout: 6_000 });
-    await expect(page.locator('.app-nav')).toBeHidden();
     await expect(page.locator('.reader-toolbar')).toBeHidden();
     await expect(page.locator('.reader-footer')).toHaveCount(0);
     await page.waitForTimeout(350);
@@ -126,7 +125,6 @@ test.describe('@smoke', () => {
     await doubleClickIframe(page);
 
     await expect(reader).not.toHaveClass(/reader-chrome-hidden/);
-    await expect(page.locator('.app-nav')).toBeVisible();
     await expect(page.locator('.reader-toolbar')).toBeVisible();
   });
 
