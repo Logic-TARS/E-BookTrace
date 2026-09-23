@@ -4144,7 +4144,8 @@
       return;
     }
 
-    const progress = currentBookMeta.progress_percent || 0;
+    const livePct = parseInt((dom.progressText && dom.progressText.textContent || '').replace('%', ''), 10);
+    const progress = currentBookMeta.progress_percent || (Number.isFinite(livePct) ? livePct : 0);
     const chapter = currentChapter || dom.toolbarChapter.textContent || '正文';
     const now = Date.now();
     const bookmark = {
