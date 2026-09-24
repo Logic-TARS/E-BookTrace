@@ -3593,7 +3593,7 @@ body.reader-chrome-hidden .reader-chrome-reveal {
   border: 1px solid var(--reader-border);
   background: rgba(255, 253, 248, 0.98);
   box-shadow: 0 12px 36px rgba(55, 45, 31, 0.12);
-  backdrop-filter: blur(18px);
+  backdrop-filter: none;
   right: 16px;
   left: 16px;
   border-radius: 14px;

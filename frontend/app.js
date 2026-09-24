@@ -94,7 +94,6 @@
   let readerChromeVisible = true;
   let readerChromeAutoHideEnabled = true;
   let readerChromeHideTimer = null;
-  let readerChromeLayoutTimer = null;
   let readerChromeHoverCloseTimer = null;
   let readerNavigatorHoverCloseTimer = null;
   let readerNotesHoverCloseTimer = null;
@@ -735,16 +734,6 @@
     }
   }
 
-  function refreshLayoutAfterChromeChange() {
-    refreshReaderLayout();
-    if (readerChromeLayoutTimer) clearTimeout(readerChromeLayoutTimer);
-    readerChromeLayoutTimer = setTimeout(() => {
-      readerChromeLayoutTimer = null;
-      refreshReaderLayout();
-      setupIframeNavigation();
-    }, 280);
-  }
-
   function setReaderChromeVisible(visible, { autoHide = false, force = false } = {}) {
     const readerIsActive = dom.readerView.classList.contains('active');
     const shouldShow = !readerIsActive ? true : Boolean(visible);
@@ -755,14 +744,11 @@
       setReaderToolsOpen(false, { skipChromeSchedule: true });
     }
 
-    const changed = readerChromeVisible !== shouldShow ||
-      dom.readerView.classList.contains('reader-chrome-hidden') === shouldShow;
     readerChromeVisible = shouldShow;
     dom.readerView.classList.toggle('reader-chrome-hidden', !shouldShow);
     document.body.classList.toggle('reader-chrome-hidden', !shouldShow && readerIsActive);
     setChromeElementHidden(dom.readerToolbar, !shouldShow);
 
-    if (changed) refreshLayoutAfterChromeChange();
     if (shouldShow && autoHide) scheduleReaderChromeHide();
     return true;
   }
@@ -862,10 +848,6 @@
     cancelReaderChromeHoverClose();
     cancelReaderNavigatorHoverClose();
     cancelReaderNotesHoverClose();
-    if (readerChromeLayoutTimer) {
-      clearTimeout(readerChromeLayoutTimer);
-      readerChromeLayoutTimer = null;
-    }
     setReaderChromeVisible(true);
     setReaderNavigatorOpen(false);
     toggleNotesPanel(false);

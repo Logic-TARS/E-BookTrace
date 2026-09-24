@@ -65,6 +65,23 @@ async function getVisibleParagraphs(page) {
 test.describe('reader typography settings', () => {
   test.use({ serviceWorkers: 'block' });
 
+  test('opens the tool panel without filtering or shifting the reading canvas', async ({ page }) => {
+    await openFixture(page);
+    const host = page.locator('#epub-container');
+    const before = await host.boundingBox();
+
+    await revealTools(page);
+    await expect(page.locator('#reader-tool-panel')).toHaveCSS('backdrop-filter', 'none');
+    const open = await host.boundingBox();
+
+    await page.locator('#btn-reader-tools').click();
+    await expect(page.locator('#reader-tool-panel')).toBeHidden();
+    const closed = await host.boundingBox();
+
+    expect(open).toEqual(before);
+    expect(closed).toEqual(before);
+  });
+
   test('applies typography, preserves the reading anchor, and restores preferences', async ({ page }) => {
     await openFixture(page);
     await page.keyboard.press('ArrowRight');
