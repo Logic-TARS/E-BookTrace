@@ -625,6 +625,32 @@ test.describe('notes management shell', () => {
     ]));
   });
 
+  test('management cards expose source, reflection, tags, progress, color, and pending state', async ({ page }) => {
+    const note = makeNote({
+      book_title: '结构测试书',
+      chapter: '第三章',
+      note: '结构化感悟',
+      tags: ['阅读', '重读'],
+      progress_percent: 42,
+      color: 'blue',
+      synced: false,
+    });
+    await installNotesApiRoutes(page, { notes: [note] });
+    await page.goto('/#/creation');
+
+    const card = page.locator('.note-management-card');
+    await expect(card).toHaveClass(/highlight-blue/);
+    await expect(card.locator('.note-management-source')).toContainText('结构测试书');
+    await expect(card.locator('.note-management-source')).toContainText('第三章');
+    await expect(card.locator('.note-management-quote')).toHaveText('测试划线');
+    await expect(card.locator('.note-management-reflection')).toContainText('结构化感悟');
+    await expect(card.locator('.note-management-tags')).toContainText('阅读');
+    await expect(card.locator('.note-management-progress')).toHaveText('42%');
+    await expect(card.locator('.note-management-sync')).toHaveText('待同步');
+    await card.getByRole('checkbox').check();
+    await expect(card).toHaveClass(/is-selected/);
+  });
+
   test('detail edits note tags and color while metadata stays read only', async ({ page }) => {
     const note = makeNote();
     await installNotesApiRoutes(page, { notes: [note] });

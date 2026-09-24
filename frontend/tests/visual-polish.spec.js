@@ -106,6 +106,9 @@ test.describe('visual polish structure', () => {
       await page.setViewportSize({ width, height: width < 700 ? 844 : 900 });
       await page.goto('/index.html');
       await expect(page.locator('#library-view')).toHaveClass(/active/, { timeout: 10000 });
+      await expect(page.locator('.app-title')).toHaveText('你的阅读素材库');
+      await expect(page.locator('.app-title strong')).toHaveText('素材库');
+      await expect(page.locator('.library-header')).toHaveCSS('border-radius', width <= 900 ? '18px' : '22px');
       await expectNoHorizontalOverflow(page);
     }
 
@@ -123,6 +126,34 @@ test.describe('visual polish structure', () => {
       await page.setViewportSize({ width, height: width < 700 ? 844 : 900 });
       await expectNoHorizontalOverflow(page);
     }
+  });
+
+  test('book cards expose a semantic open action with separate controls and keyboard support', async ({ page }) => {
+    await mockShellApi(page);
+    await page.goto('/index.html');
+    await seedBook(page);
+    await page.reload();
+
+    const card = page.locator('.book-card').filter({ hasText: book.book_title });
+    const openButton = card.getByRole('button', { name: `打开《${book.book_title}》` });
+    await expect(openButton).toBeVisible();
+    await expect(card.getByRole('button', { name: `删除《${book.book_title}》` })).toBeVisible();
+    await expect(card.locator('.book-card-cover')).toHaveText('在');
+    await expect(card.locator('.book-card-progress')).toHaveAttribute('role', 'progressbar');
+    await expect(card.locator('.book-card-progress')).toHaveAttribute('aria-valuenow', '0');
+
+    await page.evaluate(() => {
+      const readerList = document.querySelector('#notes-list');
+      const managementList = document.querySelector('#notes-management-list');
+      readerList.dataset.readerContainerProbe = 'reader';
+      managementList.dataset.readerContainerProbe = 'management';
+    });
+    await openButton.focus();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/#\/reader$/);
+    await expect(page.locator('#notes-list .empty-notes')).toContainText('选中文字开始划线');
+    await expect(page.locator('#notes-list')).toHaveAttribute('data-reader-container-probe', 'reader');
+    await expect(page.locator('#notes-management-list')).toHaveAttribute('data-reader-container-probe', 'management');
   });
 
   test('uses warm paper reader surfaces without unused sidebar columns', async ({ page }) => {

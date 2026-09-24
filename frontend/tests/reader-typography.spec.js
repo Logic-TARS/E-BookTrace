@@ -140,7 +140,7 @@ test.describe('reader typography settings', () => {
     await page.reload();
     // The current line's routing does not auto-reopen the last book; reopen it from the library.
     await expect(page.locator('#library-view')).toHaveClass(/active/, { timeout: 15_000 });
-    await page.locator('.book-card', { hasText: /multichapter/i }).click();
+    await page.locator('.book-card', { hasText: /multichapter/i }).locator('.book-card-open').click();
     await expect(page.locator('#toolbar-book-title')).toContainText(/multichapter/i, { timeout: 15_000 });
     await expect(page.locator('#reader-font-family')).toHaveValue('kai');
     await expect(page.locator('#reader-font-size')).toHaveValue('135');

@@ -142,7 +142,7 @@ test.describe('server library sync', () => {
     await pageB.goto('/index.html');
     await expect(pageB.locator('.book-card')).toHaveCount(1);
     await expect(pageB.locator('.book-card-meta')).toContainText('服务器');
-    await pageB.click('.book-card');
+    await pageB.locator('.book-card-open').click();
     await expect(pageB.locator('#toolbar-book-title')).toContainText('Multichapter');
     await expect(pageB.locator('#bookmarks-count')).toHaveText('1');
 
@@ -173,7 +173,7 @@ test.describe('server library sync', () => {
     await page.context().setOffline(false);
     await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { configurable: true, value: true }));
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await page.waitForTimeout(1800);
+    await expect.poll(() => state.syncRequests.length, { timeout: 10_000 }).toBeGreaterThan(0);
     expect(state.syncRequests[0].protocol_version).toBe(2);
     expect(state.syncRequests[0].operations[0]).toMatchObject({ type: 'highlight.trash', entity_id: 'client-note-1', payload: { deleted_at: '2026-09-21T00:00:00Z' } });
     await expect.poll(async () => readSyncQueue(page)).toEqual([]);
@@ -228,12 +228,12 @@ test.describe('server library sync', () => {
     await pageA.evaluate(async () => { const db = await new Promise((resolve, reject) => { const r = indexedDB.open('marginalia', 6); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); }); const tx = db.transaction(['books', 'highlights'], 'readwrite'); tx.objectStore('books').put({ id: 'trash-book', server_book_id: 'trash-book', source: 'server', book_title: 'Trash Fixture' }); tx.objectStore('highlights').put({ id: 'local-note', client_id: 'client-note', server_id: 'server-note', book_id: 'trash-book', highlight_text: '跨设备划线', deleted_at: null, synced: true }); await new Promise(resolve => { tx.oncomplete = resolve; }); db.close(); });
     await pageA.evaluate(() => window.dispatchEvent(new Event('online'))); await pageA.evaluate(() => window.__trashSync = true);
     await pageA.evaluate(async () => { const r = indexedDB.open('marginalia', 6); r.onsuccess = () => { const db = r.result; const tx = db.transaction('sync_queue', 'readwrite'); tx.objectStore('sync_queue').put({ id: 'trash-book-op', op_id: 'trash-book-op', book_id: 'trash-book', type: 'highlight.trash', entity_id: 'client-note', payload: { deleted_at: new Date().toISOString() } }); tx.oncomplete = () => db.close(); }; });
-    await pageA.locator('.book-card').click();
+    await pageA.locator('.book-card-open').click();
     await expect(pageA.locator('#toolbar-book-title')).toContainText('Trash Fixture');
     await openReaderTools(pageA); await pageA.click('#btn-sync'); await expect.poll(() => state.highlights[0].deleted_at).not.toBeNull();
     const contextB = await browser.newContext({ serviceWorkers: 'block' }); const pageB = await contextB.newPage(); await install(pageB); await pageB.goto('/index.html'); await expect(pageB.locator('.book-card')).toHaveCount(1);
     await pageB.evaluate(async () => { const r = indexedDB.open('marginalia', 6); r.onsuccess = () => { const db = r.result; const tx = db.transaction('sync_queue', 'readwrite'); tx.objectStore('sync_queue').put({ id: 'restore-book-op', op_id: 'restore-book-op', book_id: 'trash-book', type: 'highlight.restore', entity_id: 'client-note', payload: {} }); tx.oncomplete = () => db.close(); }; });
-    await pageB.locator('.book-card').click();
+    await pageB.locator('.book-card-open').click();
     await expect(pageB.locator('#toolbar-book-title')).toContainText('Trash Fixture');
     await openReaderTools(pageB); await pageB.click('#btn-sync'); await expect.poll(() => state.highlights[0].deleted_at).toBeNull();
     await contextA.close(); await contextB.close();

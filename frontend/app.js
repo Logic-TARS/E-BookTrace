@@ -152,7 +152,7 @@
     readerPanelBackdrop: $('#reader-panel-backdrop'),
     bookmarksList: $('#bookmarks-list'),
     bookmarksCount: $('#bookmarks-count'),
-    notesList: $('#notes-list'),
+    readerNotesList: $('#notes-list'),
     notesCount: $('#notes-count'),
     toolbarBookTitle: $('#toolbar-book-title'),
     toolbarChapter: $('#toolbar-chapter'),
@@ -214,7 +214,7 @@
     notesSort: $('#notes-sort'),
     notesPendingOnly: $('#notes-pending-only'),
     notesDataStatus: $('#notes-data-status'),
-    notesList: $('#notes-management-list'),
+    notesManagementList: $('#notes-management-list'),
     notesPrevious: $('#btn-notes-previous'),
     notesNext: $('#btn-notes-next'),
     notesPageStatus: $('#notes-page-status'),
@@ -469,7 +469,10 @@
     const retry = card.querySelector('.book-transfer-retry');
     if (label) label.textContent = formatTransferStatus(book);
     if (row) row.dataset.state = status;
-    if (progress) progress.hidden = status !== 'uploading';
+    if (progress) {
+      progress.hidden = status !== 'uploading';
+      progress.setAttribute('aria-valuenow', String(Math.round(Math.max(0, Math.min(100, book.transfer_progress || 0)))));
+    }
     if (progressBar) progressBar.style.width = Math.max(0, Math.min(100, book.transfer_progress || 0)) + '%';
     if (retry) retry.hidden = status !== 'failed' && status !== 'local_only';
   }
@@ -1110,6 +1113,18 @@
   }
 
   // ==================== LIBRARY ====================
+  function getBookInitial(title) {
+    const normalized = String(title || '书').replace(/[《》“”"'\s]/g, '');
+    return Array.from(normalized)[0] || '书';
+  }
+
+  function getStableBookTone(book) {
+    const value = String(book.id || book.book_title || 'marginalia');
+    let hash = 0;
+    for (const char of value) hash = ((hash << 5) - hash + char.codePointAt(0)) | 0;
+    return Math.abs(hash) % 6;
+  }
+
   async function renderLibrary() {
     await mergeDuplicateBooks();
 
@@ -1136,42 +1151,49 @@
       const isServer = book._source === 'server';
       const transferState = getTransferState(book);
       const transferProgress = Math.max(0, Math.min(100, book.transfer_progress || 0));
+      const readingProgress = Math.max(0, Math.min(100, Math.round(book.progress_percent || 0)));
+      const bookTitle = book.book_title || '未命名书籍';
+      const lastOpened = formatRelativeDate(book.last_opened);
       card.dataset.bookId = book.id;
+      card.dataset.tone = String(getStableBookTone(book));
       if (isServer) card.dataset.serverBook = 'true';
 
       const highlightCount = await getBookHighlightCount(book.id);
 
       card.innerHTML = `
-        <div class="book-card-cover">${isServer ? '📡' : '📖'}</div>
+        <div class="book-card-cover" aria-hidden="true"><span>${escapeHTML(getBookInitial(bookTitle))}</span></div>
         <div class="book-card-info">
-          <div class="book-card-title">${escapeHTML(book.book_title || '未命名书籍')}</div>
-          <div class="book-card-author">${escapeHTML(book.book_author || '未知作者')}</div>
-          <div class="book-card-meta">
-            <span>✏️ ${highlightCount} 条划线</span>
-            <span>${isServer ? '服务器' : formatRelativeDate(book.last_opened)}</span>
+          <button class="book-card-open" type="button" aria-label="打开《${escapeHTML(bookTitle)}》">
+            <span class="book-card-title">${escapeHTML(bookTitle)}</span>
+            <span class="book-card-author">${escapeHTML(book.book_author || '未知作者')}</span>
+          </button>
+          <div class="book-card-meta" aria-label="书籍信息">
+            <span>${highlightCount} 条划线</span>
+            <span>${isServer ? '服务器 · 云端书籍' : (lastOpened ? `上次阅读 ${escapeHTML(lastOpened)}` : '本机书籍')}</span>
             <span>${escapeHTML(formatKnowledgeStatus(book.knowledge_status))}</span>
           </div>
-          <div class="book-transfer-status" data-state="${escapeHTML(transferState)}">
+          <div class="book-transfer-status" data-state="${escapeHTML(transferState)}" role="status">
+            <span class="book-transfer-dot" aria-hidden="true"></span>
             <span class="book-transfer-label">${escapeHTML(formatTransferStatus(book))}</span>
-            <span class="book-transfer-progress" ${transferState === 'uploading' ? '' : 'hidden'}>
+            <span class="book-transfer-progress" ${transferState === 'uploading' ? '' : 'hidden'} role="progressbar" aria-label="上传进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${transferProgress}">
               <span style="width:${transferProgress}%"></span>
             </span>
-            <button class="book-transfer-retry" data-action="retry-upload"
+            <button class="book-transfer-retry" type="button" data-action="retry-upload" aria-label="重新上传《${escapeHTML(bookTitle)}》"
                     ${transferState === 'failed' || transferState === 'local_only' ? '' : 'hidden'}>
-              重试
+              重试上传
             </button>
           </div>
-          <div class="book-card-progress">
-            <div class="book-card-progress-bar" style="width:${book.progress_percent || 0}%"></div>
+          <div class="book-card-progress-row">
+            <span>阅读进度</span><strong>${readingProgress}%</strong>
+          </div>
+          <div class="book-card-progress" role="progressbar" aria-label="《${escapeHTML(bookTitle)}》阅读进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${readingProgress}">
+            <div class="book-card-progress-bar" style="width:${readingProgress}%"></div>
           </div>
         </div>
-        <button class="book-card-delete" data-action="delete" title="删除">🗑</button>
+        <button class="book-card-delete" type="button" data-action="delete" title="删除书籍" aria-label="删除《${escapeHTML(bookTitle)}》"><span aria-hidden="true">×</span></button>
       `;
 
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('[data-action]')) return;
-        openBook(book);
-      });
+      card.querySelector('.book-card-open').addEventListener('click', () => openBook(book));
 
       const deleteBtn = card.querySelector('.book-card-delete');
       if (deleteBtn) {
@@ -4246,7 +4268,7 @@
     dom.notesCount.textContent = highlights.length + ' 条';
 
     if (highlights.length === 0) {
-      dom.notesList.innerHTML = `
+      dom.readerNotesList.innerHTML = `
         <div class="empty-notes">
           <p>选中文字开始划线</p>
           <p class="empty-hint">划线后可以添加笔记和标签</p>
@@ -4254,7 +4276,7 @@
       return;
     }
 
-    dom.notesList.innerHTML = '';
+    dom.readerNotesList.innerHTML = '';
 
     for (const h of highlights) {
       const item = document.createElement('div');
@@ -4339,7 +4361,7 @@
         await deleteHighlightById(h.id);
       });
 
-      dom.notesList.appendChild(item);
+      dom.readerNotesList.appendChild(item);
     }
   }
 
@@ -4586,17 +4608,28 @@
     dom.notesDetailPane.setAttribute('aria-labelledby', 'managed-note-title');
     dom.notesDetailPane.innerHTML = `
       <div class="notes-detail-content">
-        <div class="notes-detail-heading"><h2 id="managed-note-title" tabindex="-1">笔记详情</h2><button class="btn btn-ghost btn-sm" id="btn-close-managed-note" type="button">关闭</button></div>
-        <label>划线原文<textarea aria-label="划线原文" readonly>${escapeHTML(note.highlight_text || '')}</textarea></label>
-        <label>书名<input readonly value="${escapeHTML(note.book_title || '')}"></label>
-        <label>作者<input readonly value="${escapeHTML(note.book_author || '')}"></label>
-        <label>章节<input readonly value="${escapeHTML(note.chapter || '')}"></label>
-        <label>进度<input readonly value="${escapeHTML(String(note.progress_percent ?? 0))}%"></label>
-        <label>创建时间<input readonly value="${escapeHTML(note.created_at || '')}"></label>
-        <label>定位信息<textarea aria-label="定位信息" readonly>${escapeHTML(note.cfi_range || note.cfi || '')}</textarea></label>
-        <label>感悟<textarea id="managed-note-text" aria-label="感悟">${escapeHTML(note.note || '')}</textarea></label>
-        <label>标签<input id="managed-note-tags" aria-label="标签" value="${escapeHTML((note.tags || []).join(', '))}"></label>
-        <label>高亮颜色<select id="managed-note-color" aria-label="高亮颜色"><option value="yellow">黄色</option><option value="green">绿色</option><option value="blue">蓝色</option><option value="pink">粉色</option></select></label>
+        <div class="notes-detail-heading">
+          <div><span class="eyebrow">Note detail</span><h2 id="managed-note-title" tabindex="-1">笔记详情</h2></div>
+          <button class="btn btn-ghost btn-sm" id="btn-close-managed-note" type="button" aria-label="关闭笔记详情">关闭</button>
+        </div>
+        <section class="notes-detail-section notes-detail-readonly" aria-labelledby="managed-note-source-title">
+          <div class="notes-detail-section-heading"><h3 id="managed-note-source-title">原文与出处</h3><span class="note-color-dot highlight-${escapeHTML(note.color)}" aria-label="${escapeHTML(note.color)} 高亮"></span></div>
+          <label class="notes-detail-quote">划线原文<textarea aria-label="划线原文" readonly>${escapeHTML(note.highlight_text || '')}</textarea></label>
+          <dl class="notes-detail-metadata">
+            <div><dt>书名</dt><dd>${escapeHTML(note.book_title || '未命名书籍')}</dd></div>
+            <div><dt>作者</dt><dd>${escapeHTML(note.book_author || '未知作者')}</dd></div>
+            <div><dt>章节</dt><dd>${escapeHTML(note.chapter || '未记录章节')}</dd></div>
+            <div><dt>阅读进度</dt><dd>${escapeHTML(String(note.progress_percent ?? 0))}%</dd></div>
+            <div><dt>创建时间</dt><dd>${escapeHTML(note.created_at || '未记录')}</dd></div>
+          </dl>
+          <details class="notes-location-details"><summary>查看定位信息</summary><textarea aria-label="定位信息" readonly>${escapeHTML(note.cfi_range || note.cfi || '')}</textarea></details>
+        </section>
+        <section class="notes-detail-section notes-detail-edit" aria-labelledby="managed-note-edit-title">
+          <div class="notes-detail-section-heading"><h3 id="managed-note-edit-title">整理与编辑</h3><span>修改后请保存</span></div>
+          <label>感悟<textarea id="managed-note-text" aria-label="感悟" placeholder="写下这段文字带来的思考">${escapeHTML(note.note || '')}</textarea></label>
+          <label>标签<input id="managed-note-tags" aria-label="标签" value="${escapeHTML((note.tags || []).join(', '))}" placeholder="阅读, 重读"></label>
+          <label>高亮颜色<select id="managed-note-color" aria-label="高亮颜色"><option value="yellow">黄色</option><option value="green">绿色</option><option value="blue">蓝色</option><option value="pink">粉色</option></select></label>
+        </section>
         <div class="notes-detail-actions"><button class="btn btn-danger" id="btn-delete-managed-reflection" type="button" ${note.note ? '' : 'disabled'}>删除感悟</button><button class="btn btn-primary" id="btn-save-managed-note" type="button">保存笔记</button></div>
       </div>`;
     $('#managed-note-color').value = note.color;
@@ -4721,20 +4754,33 @@
   }
 
   function renderNotesManagement(items) {
-    if (!dom.notesList) return;
-    dom.notesList.innerHTML = items.length ? items.map(note => {
+    if (!dom.notesManagementList) return;
+    dom.notesManagementList.innerHTML = items.length ? items.map(note => {
       const key = getStableNoteKey(note);
       const trash = notesQuery.view === 'trash';
-      return `<article class="note-management-card" data-note-id="${escapeHTML(note.id)}">
+      const tags = (note.tags || []).map(tag => `<span class="note-management-tag">${escapeHTML(tag)}</span>`).join('');
+      const chapter = note.chapter || '未记录章节';
+      const progress = Math.max(0, Math.min(100, Math.round(note.progress_percent || 0)));
+      return `<article class="note-management-card highlight-${escapeHTML(note.color || 'yellow')}" data-note-id="${escapeHTML(note.id)}">
         <label class="note-management-select"><input type="checkbox" aria-label="选择 ${escapeHTML(note.highlight_text || '')}" data-note-select="${escapeHTML(key)}" ${notesSelection.has(key) ? 'checked' : ''}></label>
-        <button class="note-management-card-button" type="button" ${trash ? 'aria-disabled="true"' : ''}><strong>${escapeHTML(note.highlight_text || '')}</strong><p>${escapeHTML(note.note || '未写感悟')}</p>${note.synced === false ? '<span>待同步</span>' : ''}</button>
+        <button class="note-management-card-button" type="button" ${trash ? 'aria-disabled="true" tabindex="-1"' : ''} aria-label="${trash ? '回收站笔记' : '查看笔记详情'}：${escapeHTML(note.highlight_text || '无原文')}">
+          <span class="note-management-source"><span class="note-color-dot" aria-hidden="true"></span><span class="note-management-book">${escapeHTML(note.book_title || '未命名书籍')}</span><span aria-hidden="true">·</span><span>${escapeHTML(chapter)}</span></span>
+          <strong class="note-management-quote">${escapeHTML(note.highlight_text || '无划线原文')}</strong>
+          <span class="note-management-reflection ${note.note ? 'has-note' : ''}"><b>${note.note ? '感悟' : '感悟待补'}</b>${escapeHTML(note.note || '还没有写下感悟')}</span>
+          <span class="note-management-footer">
+            <span class="note-management-tags">${tags || '<span class="note-management-tag is-empty">无标签</span>'}</span>
+            <span class="note-management-progress">${progress}%</span>
+            ${note.synced === false ? '<span class="note-management-sync">待同步</span>' : ''}
+          </span>
+        </button>
       </article>`;
-    }).join('') : '<div class="empty-state notes-empty-state"><p>还没有可显示的笔记</p></div>';
-    dom.notesList.querySelectorAll('[data-note-select]').forEach(input => input.addEventListener('change', () => {
+    }).join('') : '<div class="empty-state notes-empty-state"><div class="empty-icon" aria-hidden="true">记</div><p class="empty-state-title">还没有可显示的笔记</p><p class="empty-hint">试试清空筛选，或在阅读时划线并写下感悟。</p></div>';
+    dom.notesManagementList.querySelectorAll('[data-note-select]').forEach(input => input.addEventListener('change', () => {
       if (input.checked) notesSelection.add(input.dataset.noteSelect); else notesSelection.delete(input.dataset.noteSelect);
+      input.closest('.note-management-card')?.classList.toggle('is-selected', input.checked);
       updateNotesSelectionUi();
     }));
-    dom.notesList.querySelectorAll('.note-management-card-button').forEach(button => button.addEventListener('click', () => {
+    dom.notesManagementList.querySelectorAll('.note-management-card-button').forEach(button => button.addEventListener('click', () => {
       if (notesQuery.view === 'trash') return;
       const note = notesItems.find(item => item.id === button.closest('[data-note-id]').dataset.noteId);
       requestNotesNavigation(() => openManagedNote(note));
@@ -5258,7 +5304,7 @@
       });
     });
 
-    navigator.serviceWorker.register('sw.js?v=25')
+    navigator.serviceWorker.register('sw.js?v=39')
       .then((reg) => {
         console.log('Service Worker registered:', reg.scope);
         reg.update().catch(() => {});
@@ -5381,6 +5427,12 @@
     });
 
     // File import
+    const importTrigger = dom.fileInput.closest('.import-btn');
+    importTrigger?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      dom.fileInput.click();
+    });
     dom.fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) handleFileImport(file);

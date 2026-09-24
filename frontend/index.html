@@ -7,7 +7,7 @@
   <meta name="description" content="Marginalia - 阅读划线、读书感悟与笔记管理">
   <link rel="manifest" href="manifest.json">
   <title>Marginalia</title>
-  <link rel="stylesheet" href="style.css?v=36">
+  <link rel="stylesheet" href="style.css?v=43">
   <script src="jszip.min.js"></script>
   <script src="epub.min.js"></script>
 </head>
@@ -23,7 +23,7 @@
         <div class="operation-status-progress-bar" id="operation-status-progress-bar"></div>
       </div>
       <button class="btn btn-ghost btn-sm" id="btn-operation-retry" type="button" hidden>重试上传</button>
-      <button class="operation-status-close" id="btn-operation-close" type="button" title="关闭提示">×</button>
+      <button class="operation-status-close" id="btn-operation-close" type="button" title="关闭提示" aria-label="关闭状态提示">×</button>
     </section>
 
     <div id="library-view" class="view active">
@@ -40,7 +40,7 @@
       <header class="library-header">
         <div class="page-heading">
           <span class="eyebrow">Library</span>
-          <h1 class="app-title">你的阅读素材库</h1>
+          <h1 class="app-title"><span>你的阅读</span><strong>素材库</strong></h1>
           <p class="app-subtitle">导入 EPUB，阅读时划线，沉淀感悟，整理并导出读书笔记。</p>
           <div class="library-flow" aria-label="阅读工作流">
             <span><b>01</b> 安静阅读</span>
@@ -49,7 +49,7 @@
           </div>
         </div>
         <div class="library-actions">
-          <label class="btn btn-primary import-btn">
+          <label class="btn btn-primary import-btn" tabindex="0" role="button">
             导入 EPUB
             <input type="file" id="file-input" accept=".epub" hidden>
           </label>
@@ -420,6 +420,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="app.js?v=36"></script>
+  <script src="app.js?v=40"></script>
 </body>
 </html>
