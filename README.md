@@ -1,129 +1,113 @@
 # Marginalia
 
-**电子书阅读 → 划线 / 感悟 / 标签 → 笔记管理 → Markdown**
-
-阅读 EPUB 时划线、写感悟、打标签，在笔记管理中搜索、筛选、批量整理和使用回收站，并将完整筛选结果导出为 Markdown。离线导出会明确标注可能不完整；待同步和回收站视图不可导出。
+Marginalia 是一个本地优先的 EPUB 阅读与知识整理工具：在书籍原文中阅读、划线、记录感悟和标签，再通过笔记管理、同步和 Markdown/Obsidian 导出把内容沉淀下来。它运行在一台原生 Python 3.11 主机上，远程设备通过同一 ZeroTier 私有网络访问。
 
 ## 快速开始
 
-### 1. 启动服务
+### 1. 准备 ZeroTier
+
+在服务端和客户端安装 ZeroTier，并加入同一个私有网络。服务端必须拥有已验证的 ZeroTier IPv4 地址；客户端使用该网络地址访问服务。
+
+### 2. 配置服务
+
+按需手动复制配置模板：
 
 ```bash
-# 方式一：Docker Compose（含热重载 + 数据持久化）
-docker compose up --build
-
-# 方式二：项目级 .venv（Windows 用户可直接双击）
-start.bat
+copy .env.example .env      # Windows
+cp .env.example .env        # POSIX
 ```
 
-API 运行在 `http://localhost:8720`，浏览器打开这个地址即可使用阅读器。自动生成文档在 `/docs`。
-
-### 2. 导入 EPUB 开始阅读
-
-- 点击「导入 EPUB」，选择一个 `.epub` 文件。
-- 或者把 EPUB 文件放到 `backend/data/books/` 目录，刷新页面即可在书库看到。
-- 选中文字进行划线（支持 4 种颜色）。
-- 点击划线可以写感悟、加标签。
-- 点击「同步」保存到后端素材库。
-
-### 3. 书籍问答 API（后端）
-
-在 `.env` 中配置 OpenAI 兼容的 LLM 接口：
+在 `.env` 中设置服务端的 ZeroTier IPv4、端口以及允许的来源：
 
 ```env
-LLM_BASE_URL=https://api.deepseek.com
-LLM_API_KEY=sk-xxxxxxxx
-LLM_MODEL=deepseek-v4-pro
-EMBEDDING_BASE_URL=http://127.0.0.1:11434/v1
-EMBEDDING_API_KEY=ollama
-EMBEDDING_MODEL=qwen3-embedding:0.6b
+SERVER_HOST=你的ZeroTier_IPv4
+SERVER_PORT=8720
+CORS_ORIGINS=http://你的ZeroTier_IPv4:8720
+ALLOWED_HOSTS=你的ZeroTier_IPv4,localhost,127.0.0.1
 ```
 
-导入 EPUB 后，后端会异步建立全文向量索引。`/book-chat/` 提供 GPT 风格阅读界面（共享书库、本地全文搜索、阅读进度同步）。`/api/knowledge/*` 接口仅保留在后端、当前没有前端调用方。
+`SERVER_HOST` 必须是本机当前拥有并经 ZeroTier 网卡确认的地址。启动不会回退到普通局域网地址、localhost 或所有网卡。
 
-也可以通过 API 直接调用历史接口：
+### 3. 启动
+
+```text
+Windows：双击 start.bat
+POSIX：./start.sh
+```
+
+启动入口会创建或验证 Python 3.11 `.venv`、安装缺失依赖，并使用配置的 `SERVER_HOST` 和 `SERVER_PORT` 启动 FastAPI 服务。也可以直接运行后端测试：
 
 ```bash
-# 基础脚本生成（规则引擎，无需 LLM）
-curl -X POST http://localhost:8720/api/generate-script \
-  -H "Content-Type: application/json" \
-  -d '{"highlight_ids": ["uuid1", "uuid2", "uuid3"]}'
-
-# AI 稿件生成（需要配置 LLM）
-curl -X POST http://localhost:8720/api/drafts/generate \
-  -H "Content-Type: application/json" \
-  -d '{"target": "video", "highlight_ids": ["uuid1", "uuid2"], "topic": "阅读分享"}'
+ALLOWED_HOSTS="localhost,127.0.0.1,testserver" CORS_ORIGINS="http://testserver" .venv/Scripts/python.exe -m pytest backend/tests -q
 ```
 
-### 4. Markdown 导出
+### 4. 访问
 
-在「笔记管理」中使用搜索、书籍、标签、内容类型、颜色和排序筛选；可切换回收站并执行恢复或永久删除。在线导出由服务器生成完整筛选结果，离线导出基于本机可用数据并标注不完整。
+在同一 ZeroTier 网络中的客户端打开：
 
-历史 Obsidian 导出配置仍可用于兼容后端接口，但当前运行中的前端没有 Obsidian 导出入口。
-
-<!-- 历史兼容配置：不属于当前运行链路 -->
-在 `.env` 中设置 Obsidian 仓库路径：
-
-```env
-OBSIDIAN_VAULT_PATH=/path/to/your/obsidian/vault
+```text
+http://SERVER_HOST_VALUE:SERVER_PORT_VALUE
 ```
 
-历史后端调用仍可将划线素材写入 Obsidian 仓库；当前前端不展示该入口。
+本项目不提供账号认证，不应进行公网端口转发，也不包含 TLS。HTTP 的 ZeroTier 地址通常不是浏览器的安全上下文：远端 EPUB 阅读、笔记和同步验收，与本机安全上下文下的 PWA/Service Worker 验收是两件事。若浏览器拒绝安装或运行 Service Worker，应在安全上下文中单独验证离线能力，不要把它误判为 ZeroTier 阅读或同步失败。
+
+## 保留的产品能力
+
+- 主阅读器：EPUB 导入、书库、分页、目录、全文搜索、排版、书签、阅读位置和四种颜色划线。
+- 笔记：感悟、标签、颜色编辑、搜索、筛选、分页、批量加标签、回收站、恢复和永久删除。
+- 本地优先：IndexedDB 本地缓存、离线变更队列和 `protocol v2` 跨设备同步。
+- GPT 风格阅读器：保留 `frontend/book-chat/` 的书库、连续阅读、主题、目录、页码和阅读进度能力；这里是阅读布局，不提供问答服务。
+- 服务器书库：`/api/books`、`/api/books/upload`、文件读取、阅读进度同步和书籍删除。
+- 笔记与素材：`/api/notes`、`/api/materials`、划线 CRUD、Markdown/JSON 导出和在线筛选导出。
+- 规则式脚本：`/api/generate-script` 保留，按选定划线生成脚本，不依赖外部模型服务。
+- 历史稿件：`GET/PATCH/DELETE /api/drafts/{draft_id}` 保留，用于读取、编辑和删除既有草稿；草稿生成端点不受支持。
+- Obsidian：`/api/obsidian/export` 保留，可把素材导出到配置的 Obsidian 仓库。
+
+支持的基础接口还包括 `/health`。已移除的接口不会被文档、启动流程或前端调用。
+
+## 备份、恢复和计划任务
+
+运行数据位于 `backend/data/`。备份使用 SQLite 在线一致性备份，并为每个文件生成 SHA-256 manifest；默认目标为 `G:\Backups\Marginalia`，默认保留最近 14 份成功备份。
+
+```powershell
+# 创建备份（可选 -Destination 和 -Retention）
+.\scripts\Backup-Marginalia.ps1
+.\scripts\Backup-Marginalia.ps1 -Destination G:\Backups\Marginalia -Retention 14
+
+# 在临时目录做 manifest、SQLite 完整性和关键文件恢复演练
+.\scripts\Test-MarginaliaRestore.ps1
+
+# 安装登录启动和每日备份计划任务
+.\scripts\Install-MarginaliaScheduledTasks.ps1
+
+# 卸载计划任务（按脚本参数说明执行）
+.\scripts\Uninstall-MarginaliaScheduledTasks.ps1
+```
+
+恢复演练不会覆盖真实 `backend/data/`。备份失败时保留旧的成功备份；计划任务只调用本机启动和备份脚本。
 
 ## 项目结构
 
 ```text
-frontend/          PWA 阅读器 (epub.js + IndexedDB + vanilla JS)
-  app.js           书库、阅读、笔记管理视图
-                   笔记搜索、筛选、批量操作、回收站与 Markdown 导出
-                   排版面板、目录与书签
-backend/           FastAPI
-  main.py          路由：health、highlights CRUD、drafts CRUD、script、obsidian export、books
+frontend/          静态 PWA 阅读器、IndexedDB 与同步
+  app.js           书库、阅读、笔记管理、筛选、回收站与导出
+  book-chat/       GPT 风格阅读器布局
+backend/           FastAPI、SQLite、书库、同步、规则脚本与导出
+  main.py          API 路由
   models.py        Pydantic 数据模型
-  database.py      aiosqlite（highlights + drafts 两张表）
-  agent.py         短视频脚本生成器（规则引擎）
-  llm.py           OpenAI 兼容 LLM 客户端（稿件生成、书籍问答）
-  obsidian.py      Markdown 导出（划线素材 + 稿件）
-  books_api.py     服务端 EPUB 管理
-  config.py        环境变量配置
-docs/              架构文档
+  database.py      SQLite 访问
+  runtime.py       ZeroTier 地址与端口运行时校验
+data/              backend/data/ 下的书籍、数据库和运行数据
+scripts/           本机备份、恢复和计划任务
 ```
 
-## 三视图导航
+## 数据与边界
 
-| 视图 | 功能 |
-|------|------|
-| **书库** | 导入 EPUB、浏览书籍、进入笔记管理 |
-| **阅读** | EPUB 阅读、划线标注、写感悟、全文搜索、书签、排版面板、目录 |
-| **笔记管理** | 搜索筛选、标签/颜色编辑、批量操作、回收站与 Markdown 导出 |
+服务是面向个人的无账号工具，ZeroTier 私有网络是访问边界。不要把服务端口暴露到公网。`.env.production` 是本地敏感文件，不属于本启动路径；请由用户自行归档或处理，项目不会读取、修改或删除它。
 
-## 环境变量
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `LLM_BASE_URL` | OpenAI 兼容 API 地址 | （空） |
-| `LLM_API_KEY` | API 密钥 | （空） |
-| `LLM_MODEL` | 模型名称 | （空） |
-| `EMBEDDING_BASE_URL` | 本地 OpenAI 兼容向量接口 | `http://127.0.0.1:11434/v1` |
-| `EMBEDDING_API_KEY` | 向量接口兼容密钥 | `ollama` |
-| `EMBEDDING_MODEL` | EPUB 语义索引使用的向量模型 | `qwen3-embedding:0.6b` |
-| `LLM_EMBEDDING_MODEL` | 旧版向量模型变量，仅作兼容回退 | （空） |
-| `MAX_EPUB_UPLOAD_MB` | AI 索引接受的 EPUB 大小上限 | `100` |
-| `OBSIDIAN_VAULT_PATH` | Obsidian 仓库路径 | （空） |
-| `DATABASE_URL` | SQLite 数据库路径 | `backend/data/marginalia.db` |
-
-## MVP 路线
-
-- [x] EPUB 阅读 + 本机离线缓存 + 服务器持久书库
-- [x] 阅读进度、书签、划线和笔记跨设备自动同步
-- [x] 短视频脚本生成（规则引擎）
-- [x] AI 增强稿件生成（LLM，视频号 + 公众号）
-- [x] Obsidian Markdown 导出
-- [x] 服务端 EPUB 上传、哈希去重、索引与全端删除（`/api/books`）
-- [x] 创作面板（素材筛选 → 稿件生成 → 编辑 → 导出）
-- [x] Docker Compose 一键部署
-- [ ] 自动同步（Service Worker Background Sync）
+历史数据库中可能仍存在旧表和旧数据；它们不会被启动流程自动删除，也不代表当前运行时能力。
 
 ## 文档
 
+- [产品范围](PRODUCT.md)
 - [架构概览](docs/ARCHITECTURE.md)
