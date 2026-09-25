@@ -100,6 +100,23 @@ async function expectNoHorizontalOverflow(page) {
 test.describe('visual polish structure', () => {
   test.use({ serviceWorkers: 'block' });
 
+  test('presents the E-书痕 brand throughout the main shell', async ({ page }) => {
+    await installNotesApiRoutes(page, { notes: [] });
+    await page.goto('/index.html');
+
+    await expect(page).toHaveTitle('E-书痕 · E-BookTrace');
+    await expect(page.locator('.home-nav .brand-mark')).toHaveText('E');
+    await expect(page.locator('.home-nav .brand-copy strong')).toHaveText('E-书痕');
+    await expect(page.locator('.home-nav .brand-copy')).toContainText('E-BookTrace');
+    await expect(page.locator('#empty-library .empty-icon')).toHaveText('E');
+
+    await page.evaluate(() => {
+      document.querySelector('#library-view').classList.remove('active');
+      document.querySelector('#reader-view').classList.add('active');
+    });
+    await expect(page.locator('.reader-product-name')).toHaveText('E-书痕');
+  });
+
   test('keeps the polished library and notes workspace structured across target widths', async ({ page }) => {
     await installNotesApiRoutes(page, { notes: [] });
     for (const width of [360, 390, 768, 1000, 1440]) {

@@ -315,13 +315,13 @@
       button.setAttribute('role', 'listitem');
       button.setAttribute('aria-current', String(Boolean(selectedBook && selectedBook.id === book.id)));
       button.append(
-        makeElement('strong', '', book.title || book.original_filename || book.filename || '未命名对话')
+        makeElement('strong', '', book.title || book.original_filename || book.filename || '未命名书籍')
       );
       button.addEventListener('click', () => selectBook(book.id));
       dom.bookList.appendChild(button);
     });
     dom.libraryEmpty.hidden = books.length > 0;
-    if (!books.length) dom.libraryEmpty.textContent = '还没有对话，点击上方按钮开始。';
+    if (!books.length) dom.libraryEmpty.textContent = '还没有书籍，点击上方按钮导入。';
   }
 
   function flattenToc(items, output = [], parentLabel = '') {
@@ -583,8 +583,8 @@
       renderBooks();
       const wanted = preferredId === undefined ? readStorage(STORAGE.selectedBook) : preferredId;
       if (wanted && books.some(book => book.id === wanted)) await selectBook(wanted);
-      else if (!books.length) setReaderState('empty', '有什么可以帮忙的？', '开始一个新对话，它会出现在左侧列表中。', '新聊天');
-      else setReaderState('idle', '有什么可以帮忙的？', '从左侧选择一个对话继续。');
+      else if (!books.length) setReaderState('empty', '选择一本书开始阅读', '导入一本 EPUB，它会出现在左侧书库中。', '导入书籍');
+      else setReaderState('idle', '选择一本书开始阅读', '从左侧书库选择一本书。');
     } catch (error) {
       dom.libraryEmpty.hidden = false;
       dom.libraryEmpty.textContent = '暂时无法加载列表。';
@@ -613,7 +613,7 @@
     renderBooks();
     clearSearch();
     dom.searchInput.value = '';
-    dom.tocBookTitle.textContent = match.title || match.original_filename || match.filename || '未命名对话';
+    dom.tocBookTitle.textContent = match.title || match.original_filename || match.filename || '未命名书籍';
     dom.chapterTitle.textContent = '正在准备…';
     dom.pageLabel.textContent = '第 0 / 0 页';
     dom.progressLabel.textContent = '计算中…';
@@ -946,23 +946,23 @@
   async function uploadBook(file) {
     if (!file) return;
     dom.importButton.disabled = true;
-    dom.importButton.querySelector('span:last-child').textContent = '正在创建…';
-    setReaderState('loading', '正在创建', '请稍候…');
+    dom.importButton.querySelector('span:last-child').textContent = '正在导入…';
+    setReaderState('loading', '正在导入书籍', '请稍候…');
     try {
       const form = new FormData();
       form.append('file', file);
       const response = await fetch('/api/books/upload', { method: 'POST', body: form });
-      if (!response.ok) throw new Error(await parseError(response, '创建失败'));
+      if (!response.ok) throw new Error(await parseError(response, '导入失败'));
       const result = await response.json();
-      if (!result.book || !result.book.id) throw new Error('服务器没有返回数据');
-      showToast(result.created === false ? '已经存在同样的内容' : '已创建');
+      if (!result.book || !result.book.id) throw new Error('服务器没有返回书籍数据');
+      showToast(result.created === false ? '书库中已有相同书籍' : '书籍已导入');
       await loadBooks(result.book.id);
     } catch (error) {
-      setReaderState('error', '创建失败', error.message || '请检查文件后重试。', '重试');
+      setReaderState('error', '导入失败', error.message || '请检查文件后重试。', '重试');
     } finally {
       dom.epubInput.value = '';
       dom.importButton.disabled = false;
-      dom.importButton.querySelector('span:last-child').textContent = '新聊天';
+      dom.importButton.querySelector('span:last-child').textContent = '导入书籍';
     }
   }
 

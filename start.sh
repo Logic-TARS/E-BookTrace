@@ -8,7 +8,7 @@ PORT=8720
 
 echo
 echo "================================"
-echo "  Marginalia - EPUB Reader"
+echo "  E-BookTrace - EPUB Reader"
 echo "================================"
 echo
 

@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Marginalia
+title E-BookTrace
 
 set "PROJECT_ROOT=%~dp0"
 set "VENV_DIR=%PROJECT_ROOT%.venv"
@@ -9,7 +9,7 @@ set "PORT=8720"
 
 echo.
 echo ================================
-echo   Marginalia - EPUB Reader
+echo   E-BookTrace - EPUB Reader
 echo ================================
 echo.
 

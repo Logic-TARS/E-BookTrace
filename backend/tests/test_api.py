@@ -72,7 +72,8 @@ def client():
 
 
 class TestHealth:
-    def test_health_check(self, client):
+    def test_public_api_title_and_stable_health_identifier(self, client):
+        assert app.title == "E-BookTrace API"
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()

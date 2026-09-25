@@ -40,7 +40,7 @@ def _note_sort_key(note: dict[str, Any]) -> tuple[Any, str, str]:
 def render_notes_markdown(
     notes: list[dict[str, Any]], *, offline: bool = False
 ) -> str:
-    sections = ["# Marginalia 笔记"]
+    sections = ["# E-书痕 笔记"]
     if offline:
         sections.append("> 离线导出，可能不完整。")
 
@@ -87,4 +87,4 @@ def render_notes_markdown(
 
 def notes_markdown_filename(today: Optional[date] = None) -> str:
     export_date = today or date.today()
-    return f"Marginalia-笔记-{export_date.isoformat()}.md"
+    return f"E-书痕-笔记-{export_date.isoformat()}.md"

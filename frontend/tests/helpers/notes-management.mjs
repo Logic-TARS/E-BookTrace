@@ -242,8 +242,8 @@ export async function installNotesApiRoutes(page, state = {}) {
       await route.fulfill({
         status: 200,
         contentType: 'text/markdown; charset=utf-8',
-        headers: { 'content-disposition': 'attachment; filename="Marginalia-notes.md"' },
-        body: state.markdown || '# Marginalia 笔记\n',
+        headers: { 'content-disposition': 'attachment; filename="E-BookTrace-notes.md"' },
+        body: state.markdown || '# E-书痕 笔记\n',
       });
       return;
     }

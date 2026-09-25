@@ -1,4 +1,4 @@
-"""Marginalia API — FastAPI application."""
+"""E-BookTrace API — FastAPI application."""
 
 from __future__ import annotations
 
@@ -87,8 +87,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Marginalia API",
-    description="E-book highlights → Notes Library → Creation Agent",
+    title="E-BookTrace API",
+    description="E-BookTrace highlights → Notes Library → Creation Agent",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -680,7 +680,7 @@ async def export_notes_markdown(
         media_type="text/markdown; charset=utf-8",
         headers={
             "Content-Disposition": (
-                f"attachment; filename=Marginalia-notes.md; "
+                f"attachment; filename=E-BookTrace-notes.md; "
                 f"filename*=UTF-8''{quote(filename)}"
             )
         },

@@ -14,17 +14,17 @@
       document.querySelector('meta[name="theme-color"]').content = theme === 'light' ? '#ffffff' : theme === 'sepia' ? '#f6efdd' : '#171717';
     } catch (_error) {}
   </script>
-  <meta name="description" content="ChatGPT">
-  <title>ChatGPT</title>
-  <link rel="stylesheet" href="style.css?v=3">
+  <meta name="description" content="E-书痕 GPT 风格阅读器，专注 EPUB 书库、目录与本书搜索">
+  <title>E-书痕 · GPT 风格阅读器</title>
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar" id="sidebar" aria-label="侧栏" aria-hidden="false">
       <div class="sidebar-header">
-        <a class="brand" href="/book-chat/" aria-label="ChatGPT 首页">
-          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></span>
-          <span><strong>ChatGPT</strong></span>
+        <a class="brand" href="/book-chat/" aria-label="E-书痕首页">
+          <span class="brand-mark" aria-hidden="true">E</span>
+          <span><strong>E-书痕</strong><small>E-BookTrace</small></span>
         </a>
         <div class="sidebar-header-actions">
           <button class="icon-button theme-toggle" id="theme-toggle" type="button" aria-label="切换到浅色模式" title="切换到浅色模式">
@@ -35,7 +35,7 @@
       </div>
 
       <div class="sidebar-tabs" role="tablist" aria-label="导航">
-        <button class="sidebar-tab" id="library-tab" type="button" role="tab" aria-selected="true" aria-controls="library-panel" tabindex="0">聊天</button>
+        <button class="sidebar-tab" id="library-tab" type="button" role="tab" aria-selected="true" aria-controls="library-panel" tabindex="0">书库</button>
         <button class="sidebar-tab" id="toc-tab" type="button" role="tab" aria-selected="false" aria-controls="toc-panel" tabindex="-1">大纲</button>
       </div>
 
@@ -43,12 +43,12 @@
         <div class="sidebar-actions">
           <input id="epub-input" type="file" accept=".epub,application/epub+zip" hidden>
           <button class="primary-sidebar-button" id="import-button" type="button">
-            <span aria-hidden="true">＋</span><span>新聊天</span>
+            <span aria-hidden="true">＋</span><span>导入书籍</span>
           </button>
         </div>
         <div class="section-heading">
-          <h2>聊天历史</h2>
-          <span id="library-count" aria-label="对话数量">0</span>
+          <h2>书籍</h2>
+          <span id="library-count" aria-label="书籍数量">0</span>
         </div>
         <div class="book-list" id="book-list" role="list" aria-live="polite"></div>
         <p class="sidebar-empty" id="library-empty" role="status">正在加载…</p>
@@ -56,10 +56,10 @@
 
       <section class="sidebar-panel toc-panel" id="toc-panel" role="tabpanel" aria-labelledby="toc-tab" hidden>
         <div class="toc-book-summary" aria-live="polite">
-          <strong id="toc-book-title">ChatGPT</strong>
+          <strong id="toc-book-title">E-书痕</strong>
         </div>
         <nav class="toc-list" id="toc-list" aria-label="大纲"></nav>
-        <p class="sidebar-empty" id="toc-empty">选择对话后显示大纲。</p>
+        <p class="sidebar-empty" id="toc-empty">选择书籍后显示大纲。</p>
       </section>
 
     </aside>
@@ -69,19 +69,19 @@
     <main class="reader-main">
       <header class="topbar">
         <button class="icon-button" id="open-sidebar" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false">☰</button>
-        <h1 id="chapter-title" aria-live="polite">ChatGPT</h1>
+        <h1 id="chapter-title" aria-live="polite">E-书痕</h1>
         <span class="progress-label" id="progress-label" aria-label="进度" hidden>0%</span>
       </header>
 
       <div class="reader-content">
-        <section class="reading-canvas" aria-label="对话内容">
+        <section class="reading-canvas" aria-label="书籍内容">
           <div class="reader-stage">
             <div class="epub-container" id="epub-container"></div>
             <div class="reader-state" id="reader-state" role="status" aria-live="polite">
-              <div class="state-mark" id="state-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></div>
-              <h2 id="state-title">有什么可以帮忙的？</h2>
-              <p id="state-description">从左侧选择对话继续，或开始一个新对话。</p>
-              <button class="state-action" id="state-action" type="button">新聊天</button>
+              <div class="state-mark" id="state-mark" aria-hidden="true">E</div>
+              <h2 id="state-title">选择一本书开始阅读</h2>
+              <p id="state-description">从左侧书库选择书籍，或导入一本 EPUB。</p>
+              <button class="state-action" id="state-action" type="button">导入书籍</button>
             </div>
           </div>
         </section>
@@ -99,7 +99,7 @@
           </div>
           <div class="composer">
             <label class="sr-only" for="search-input">搜索</label>
-            <input id="search-input" type="search" placeholder="询问任何问题" autocomplete="off" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false" disabled>
+            <input id="search-input" type="search" placeholder="搜索本书内容" autocomplete="off" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false" disabled>
             <button class="search-jump" id="search-jump" type="button" aria-label="跳转到搜索结果" disabled>⌕</button>
           </div>
         </footer>
@@ -110,6 +110,6 @@
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   <script src="/jszip.min.js"></script>
   <script src="/epub.min.js"></script>
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

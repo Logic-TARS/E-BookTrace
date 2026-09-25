@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Marginalia is a small FastAPI plus static PWA project.
+E-书痕 (E-BookTrace) is a small FastAPI plus static PWA project. Legacy `marginalia` storage, service, script, and path identifiers remain for compatibility.
 
 - `backend/` contains the Python API, persistence, book Q&A, Obsidian export, and script agent logic. `main.py` defines routes, `database.py` handles SQLite access, `models.py` owns Pydantic schemas, and `config.py` reads environment settings.
 - `frontend/` contains the browser reader PWA: `index.html`, `style.css`, `app.js`, `sw.js`, and `manifest.json`. IndexedDB is v6; the notes API supports parameterized search/filter/facets/pagination, trash, batch actions, and `/api/notes/export.md`.

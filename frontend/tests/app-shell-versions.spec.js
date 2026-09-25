@@ -9,6 +9,8 @@ const FRONTEND_DIR = join(__dirname, '..');
 test.describe('app shell version invariant', () => {
   test('index.html and sw.js APP_SHELL agree on app.js/style.css versions; cache name is well-formed', () => {
     const indexHtml = readFileSync(join(FRONTEND_DIR, 'index.html'), 'utf8');
+    const appJs = readFileSync(join(FRONTEND_DIR, 'app.js'), 'utf8');
+    const bookChatHtml = readFileSync(join(FRONTEND_DIR, 'book-chat', 'index.html'), 'utf8');
     const swJs = readFileSync(join(FRONTEND_DIR, 'sw.js'), 'utf8');
 
     // Collect every (app.js|style.css)?v=\d+ reference from index.html
@@ -31,9 +33,20 @@ test.describe('app shell version invariant', () => {
     expect(missingFromSw).toEqual([]);
     expect(missingFromIndex).toEqual([]);
 
+    const bookChatVersions = [...bookChatHtml.matchAll(/(?:app\.js|style\.css)\?v=\d+/g)].map(match => `book-chat/${match[0]}`);
+    expect(bookChatVersions).toHaveLength(2);
+    for (const versionedAsset of bookChatVersions) {
+      expect(swJs).toContain(`'${versionedAsset}'`);
+    }
+
+    const serviceWorkerVersion = appJs.match(/serviceWorker\.register\('sw\.js\?v=(\d+)'\)/);
+    expect(serviceWorkerVersion).not.toBeNull();
+
     // Cache name must match /marginalia-shell-v\d+/
     const cacheMatch = swJs.match(/marginalia-shell-v(\d+)/);
     expect(cacheMatch).not.toBeNull();
     expect(cacheMatch[0]).toMatch(/^marginalia-shell-v\d+$/);
+    expect(Number(serviceWorkerVersion[1])).toBeGreaterThan(0);
+    expect(Number(cacheMatch[1])).toBeGreaterThan(0);
   });
 });

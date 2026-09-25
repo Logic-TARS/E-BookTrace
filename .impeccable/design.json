@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-07-25T03:53:14.8532238Z",
-  "title": "Design System: Marginalia",
+  "title": "Design System: E-书痕 / E-BookTrace",
   "extensions": {
     "colorMeta": {
       "canvas": {
@@ -263,7 +263,7 @@
       "name": "Book Card",
       "kind": "card",
       "description": "书库中的签名组件，把装帧感、书目信息和阅读进度合为一体。",
-      "html": "<article class=\"ds-book-card\"><div class=\"ds-book-cover\">M</div><div class=\"ds-book-info\"><strong class=\"ds-book-title\">书籍标题示例</strong><span class=\"ds-book-author\">作者姓名</span><span class=\"ds-book-meta\">上次阅读 · 42%</span><div class=\"ds-book-progress\"><span></span></div></div></article>",
+      "html": "<article class=\"ds-book-card\"><div class=\"ds-book-cover\">E</div><div class=\"ds-book-info\"><strong class=\"ds-book-title\">书籍标题示例</strong><span class=\"ds-book-author\">作者姓名</span><span class=\"ds-book-meta\">上次阅读 · 42%</span><div class=\"ds-book-progress\"><span></span></div></div></article>",
       "css": ".ds-book-card { min-height: 170px; display: grid; grid-template-columns: 74px 1fr; gap: 14px; padding: 16px; border: 1px solid rgba(157,142,118,.35); border-radius: 8px; background: linear-gradient(135deg, rgba(255,253,248,.98), rgba(250,244,234,.88)); color: var(--ink, #20231f); box-shadow: var(--shadow-sm, 0 1px 2px rgba(55,45,31,.08)); transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; } .ds-book-card:hover { transform: translateY(-2px); border-color: rgba(47,96,74,.35); box-shadow: var(--shadow-md, 0 10px 28px rgba(55,45,31,.12)); } .ds-book-card:focus-within { box-shadow: 0 0 0 3px rgba(47,96,74,.14); } .ds-book-cover { width: 74px; height: 104px; display: grid; place-items: center; border-radius: 6px; background: linear-gradient(90deg, rgba(0,0,0,.1) 0 8px, transparent 8px), linear-gradient(145deg, #315c48, #203f34); color: #f8e9c8; font: 700 28px/1 Georgia, serif; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18), 0 10px 18px rgba(38,54,45,.18); } .ds-book-info { min-width: 0; display: flex; flex-direction: column; } .ds-book-title { font: 700 18px/1.35 \"Noto Serif SC\", \"Source Han Serif SC\", \"Songti SC\", Georgia, serif; } .ds-book-author, .ds-book-meta { color: var(--ink-muted, #87897e); font: 400 12px/1.45 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; } .ds-book-author { margin-top: 7px; } .ds-book-meta { margin-top: auto; } .ds-book-progress { height: 5px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: rgba(47,96,74,.12); } .ds-book-progress span { display: block; width: 42%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent, #2f604a), #6c9a63); }"
     },
     {
@@ -276,7 +276,7 @@
   ],
   "narrative": {
     "northStar": "静谧书斋",
-    "overview": "Marginalia 的界面像一间经过整理的私人书斋：温暖但不怀旧，精致但不炫耀。宣纸米白承载长时间阅读，墨松绿只在需要方向与确认时出现，衬线标题带来书卷气，系统无衬线字体保证工具界面的清晰和效率。\n\n界面以精致克制为原则。层次来自纸张色差、细边框和低对比度环境阴影，而不是强烈玻璃效果或夸张悬浮。阅读内容是视觉中心；控件、状态和创作工具以稳定、安静的方式退居其后。",
+    "overview": "E-书痕的界面像一间经过整理的私人书斋：温暖但不怀旧，精致但不炫耀。宣纸米白承载长时间阅读，墨松绿只在需要方向与确认时出现，衬线标题带来书卷气，系统无衬线字体保证工具界面的清晰和效率。\n\n界面以精致克制为原则。层次来自纸张色差、细边框和低对比度环境阴影，而不是强烈玻璃效果或夸张悬浮。阅读内容是视觉中心；控件、状态和创作工具以稳定、安静的方式退居其后。",
     "keyCharacteristics": [
       "暖纸色底与深墨色文字形成低刺激、长时间可读的基调。",
       "墨松绿是稀有而明确的操作与状态信号。",

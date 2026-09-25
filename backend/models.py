@@ -1,4 +1,4 @@
-"""Pydantic models for the Marginalia API."""
+"""Pydantic models for the E-BookTrace API."""
 
 from datetime import datetime
 from typing import Literal, Optional

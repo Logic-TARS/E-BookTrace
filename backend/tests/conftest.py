@@ -1,4 +1,4 @@
-"""Shared test fixtures for Marginalia backend tests."""
+"""Shared test fixtures for E-BookTrace backend tests."""
 
 import asyncio
 import os

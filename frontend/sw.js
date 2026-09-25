@@ -1,22 +1,22 @@
 /**
- * Marginalia Service Worker
+ * E-BookTrace Service Worker
  * Network-first for app shell HTML/JS/CSS; cache-first for stable EPUB files;
  * network-only for API calls (503 when offline); cache-first for other static assets.
  */
-const APP_SHELL_CACHE_NAME = 'marginalia-shell-v44';
+const APP_SHELL_CACHE_NAME = 'marginalia-shell-v45';
 const EPUB_CACHE_NAME = 'marginalia-epubs-v1';
 
 const APP_SHELL = [
   '.',
   'index.html',
-  'app.js?v=41',
-  'style.css?v=44',
+  'app.js?v=42',
+  'style.css?v=45',
   'manifest.json',
   'jszip.min.js',
   'epub.min.js',
   'book-chat/index.html',
-  'book-chat/app.js?v=4',
-  'book-chat/style.css?v=3',
+  'book-chat/app.js?v=5',
+  'book-chat/style.css?v=4',
 ];
 
 // Install: cache app shell

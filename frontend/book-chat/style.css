@@ -263,14 +263,17 @@ button {
   width: 34px;
   height: 34px;
   place-items: center;
+  border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
 }
 
-.brand-mark svg,
-.state-mark svg {
-  width: 60%;
-  height: 60%;
+.brand > span:last-child small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .brand > span:last-child {

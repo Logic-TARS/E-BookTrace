@@ -1,5 +1,5 @@
 /**
- * Marginalia — Core Application Logic
+ * E-BookTrace — Core Application Logic
  * Handles: IndexedDB, epub.js reader, highlights, notes, sync, PWA
  */
 (function () {
@@ -5022,7 +5022,7 @@
   }
 
   function renderOfflineNotesMarkdown(items) {
-    const lines = ['# Marginalia 笔记', '', '> 离线导出，可能不完整。', ''];
+    const lines = ['# E-书痕 笔记', '', '> 离线导出，可能不完整。', ''];
     items.forEach(note => {
       lines.push(`## 《${note.book_title || '未命名书籍'}》`);
       if (note.chapter) lines.push(`### ${note.chapter}`);
@@ -5047,7 +5047,7 @@
   async function exportNotesMarkdown() {
     if (!dom.btnExportNotesMarkdown || dom.btnExportNotesMarkdown.disabled) return;
     if (notesQuery.view === 'trash' || notesQuery.dataScope === 'pending') return;
-    const filename = `Marginalia-笔记-${new Date().toISOString().slice(0, 10)}.md`;
+    const filename = `E-书痕-笔记-${new Date().toISOString().slice(0, 10)}.md`;
     try {
       if (!navigator.onLine) {
         const result = await loadOfflineNotes(notesQuery);
@@ -5281,12 +5281,12 @@
         return;
       }
       setOperationStatus({
-        message: 'Marginalia 已更新',
+        message: 'E-书痕已更新',
         detail: '当前操作不会被打断，请稍后刷新页面使用新版本',
       });
     });
 
-    navigator.serviceWorker.register('sw.js?v=39')
+    navigator.serviceWorker.register('sw.js?v=40')
       .then((reg) => {
         console.log('Service Worker registered:', reg.scope);
         reg.update().catch(() => {});
@@ -5633,7 +5633,7 @@
     refreshServerLibrary().catch(() => {});
     migrateLocalBooksToServer().catch(() => {});
 
-    console.log('Marginalia ready 📖');
+    console.log('E-BookTrace ready 📖');
   }
 
   // Start the app

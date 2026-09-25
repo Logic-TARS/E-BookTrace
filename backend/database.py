@@ -1,4 +1,4 @@
-"""SQLite storage layer for Marginalia highlights."""
+"""SQLite storage layer for E-BookTrace highlights."""
 
 from __future__ import annotations
 

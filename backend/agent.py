@@ -1,5 +1,5 @@
 """
-Short video script generator for Marginalia.
+Short video script generator for E-BookTrace.
 
 Takes e-book highlights and produces a video script outline using an
 "editing-first, shooting-second" approach — the script determines the

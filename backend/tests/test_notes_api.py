@@ -190,8 +190,8 @@ def test_export_notes_markdown_uses_filters_and_download_headers(client, seeded_
     assert response.headers["content-type"] == "text/markdown; charset=utf-8"
     disposition = response.headers["content-disposition"]
     assert "attachment" in disposition
-    assert "filename=Marginalia-notes.md" in disposition
-    assert "filename*=UTF-8''Marginalia-%E7%AC%94%E8%AE%B0-" in disposition
+    assert "filename=E-BookTrace-notes.md" in disposition
+    assert "filename*=UTF-8''E-%E4%B9%A6%E7%97%95-%E7%AC%94%E8%AE%B0-" in disposition
     assert disposition.endswith(".md")
     assert "庄子" in response.text
     assert "书乙" not in response.text

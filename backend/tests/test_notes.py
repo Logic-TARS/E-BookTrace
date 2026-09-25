@@ -90,8 +90,8 @@ def test_render_notes_markdown_keeps_user_multiline_content_out_of_structure():
 def test_render_notes_markdown_marks_offline_exports():
     markdown = render_notes_markdown([], offline=True)
 
-    assert markdown.startswith("# Marginalia 笔记\n\n> 离线导出，可能不完整。")
+    assert markdown.startswith("# E-书痕 笔记\n\n> 离线导出，可能不完整。")
 
 
 def test_notes_markdown_filename_uses_supplied_date():
-    assert notes_markdown_filename(date(2026, 9, 20)) == "Marginalia-笔记-2026-09-20.md"
+    assert notes_markdown_filename(date(2026, 9, 20)) == "E-书痕-笔记-2026-09-20.md"

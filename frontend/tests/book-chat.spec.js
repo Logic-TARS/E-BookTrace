@@ -129,6 +129,20 @@ async function iframeTheme(page) {
 test.describe('EPUB reader', () => {
   test.use({ serviceWorkers: 'block' });
 
+  test('uses E-书痕 branding and book-reader semantics without chat product copy', async ({ page }) => {
+    await mockReaderApi(page);
+    await page.goto('/book-chat/');
+
+    await expect(page).toHaveTitle('E-书痕 · GPT 风格阅读器');
+    await expect(page.locator('meta[name="description"]')).toHaveAttribute('content', /E-书痕.*GPT 风格阅读器/);
+    await expect(page.locator('.brand')).toContainText('E-书痕');
+    await expect(page.getByRole('tab', { name: '书库' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /导入书籍/ })).toBeVisible();
+    await expect(page.locator('.section-heading h2')).toHaveText('书籍');
+    await expect(page.locator('#search-input')).toHaveAttribute('placeholder', '搜索本书内容');
+    await expect(page.locator('body')).not.toContainText(/ChatGPT|聊天|对话|询问/);
+  });
+
   test('uses the system theme initially and follows it until the user chooses a theme', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'light' });
     const api = await mockReaderApi(page);
@@ -184,19 +198,19 @@ test.describe('EPUB reader', () => {
 
     const tablist = page.getByRole('tablist', { name: '导航' });
     await expect(tablist).toBeVisible();
-    await expect(page.getByRole('tab', { name: '聊天' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('tabpanel', { name: '聊天' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: '书库' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('tabpanel', { name: '书库' })).toBeVisible();
     await expect(page.getByRole('tabpanel', { name: '大纲' })).toBeHidden();
 
     await page.locator('#book-list .book-button', { hasText: 'MultiChapter' }).click();
     await expect(page.locator('#epub-container iframe').first()).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole('tab', { name: '大纲' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('tabpanel', { name: '聊天' })).toBeHidden();
+    await expect(page.getByRole('tabpanel', { name: '书库' })).toBeHidden();
     await expect(page.getByRole('tabpanel', { name: '大纲' })).toBeVisible();
     await expect(page.locator('#toc-book-title')).toContainText(/Multichapter/i);
 
-    await page.getByRole('tab', { name: '聊天' }).click();
-    await expect(page.getByRole('tabpanel', { name: '聊天' })).toBeVisible();
+    await page.getByRole('tab', { name: '书库' }).click();
+    await expect(page.getByRole('tabpanel', { name: '书库' })).toBeVisible();
     await expect(page.getByRole('tabpanel', { name: '大纲' })).toBeHidden();
   });
 
@@ -229,7 +243,7 @@ test.describe('EPUB reader', () => {
     await expect(page.locator('.topbar')).not.toContainText('Fixture Author');
     await expect(page.locator('#progress-label')).toBeHidden();
     await expect(page.locator('#page-navigation')).toBeHidden();
-    await expect(page.locator('.brand')).toContainText('ChatGPT');
+    await expect(page.locator('.brand')).toContainText('E-书痕');
 
     const layout = await page.evaluate(() => {
       const canvas = document.querySelector('.reading-canvas').getBoundingClientRect();
@@ -282,7 +296,7 @@ test.describe('EPUB reader', () => {
     await openReader(page, api);
     const input = page.locator('#search-input');
 
-    await expect(input).toHaveAttribute('placeholder', '询问任何问题');
+    await expect(input).toHaveAttribute('placeholder', '搜索本书内容');
     await expect(page.locator('#search-jump')).toHaveAttribute('aria-label', '跳转到搜索结果');
     await expect(page.locator('#search-jump')).not.toHaveText('↑');
     await expect(page.locator('.composer-hint')).toHaveCount(0);
@@ -404,7 +418,7 @@ test.describe('EPUB reader', () => {
     await expect(page.locator('#sidebar')).toHaveAttribute('aria-hidden', 'false');
     await expect(page.locator('#backdrop')).toBeVisible();
     await expect(page.getByRole('button', { name: '切换到护眼模式' })).toBeVisible();
-    await page.getByRole('tab', { name: '聊天' }).click();
+    await page.getByRole('tab', { name: '书库' }).click();
     await page.locator('#book-list .book-button', { hasText: 'MultiChapter' }).click();
     await expect(page.locator('#sidebar')).not.toHaveClass(/open/);
 
@@ -419,7 +433,7 @@ test.describe('EPUB reader', () => {
   test('imports the fixture through the upload endpoint', async ({ page }) => {
     const api = await mockReaderApi(page, { empty: true });
     await page.goto('/book-chat/');
-    await expect(page.locator('#state-title')).toContainText('有什么可以帮忙的？');
+    await expect(page.locator('#state-title')).toContainText('选择一本书开始阅读');
 
     await page.setInputFiles('#epub-input', FIXTURE);
     await expect.poll(api.uploadCount).toBe(1);

@@ -68,7 +68,7 @@ do {
 
 if ($health -ne "healthy") {
     & docker compose -f $composeFile logs --tail 80 api
-    throw "Marginalia API did not become healthy within $HealthTimeoutSeconds seconds."
+    throw "E-BookTrace API did not become healthy within $HealthTimeoutSeconds seconds."
 }
 
 $publishedPorts = & docker compose -f $composeFile port api 8720
@@ -84,6 +84,6 @@ if ($nonLoopbackListeners) {
     throw "Security check failed: host port 8720 is still reachable on $addresses. Remove the legacy listener or portproxy after Tunnel cutover."
 }
 
-Write-Output "Marginalia production API is healthy and port 8720 is not published."
+Write-Output "E-BookTrace production API is healthy and port 8720 is not published."
 & docker compose -f $composeFile ps
 & docker compose -f $composeFile logs --tail 20 cloudflared

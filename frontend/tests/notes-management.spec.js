@@ -80,14 +80,14 @@ test.describe('notes management shell', () => {
   test('online Markdown export downloads the server response', async ({ page }) => {
     await installNotesApiRoutes(page, {
       notes: [makeNote()],
-      markdown: '# Marginalia 笔记\\n\\n## 《测试书》\\n',
+      markdown: '# E-书痕 笔记\\n\\n## 《测试书》\\n',
     });
     await page.goto('/#/creation');
 
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出 Markdown' }).click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toBe('Marginalia-notes.md');
+    expect(download.suggestedFilename()).toBe('E-BookTrace-notes.md');
   });
 
   test('offline Markdown marks the export as incomplete', async ({ page }) => {
