@@ -1,16 +1,17 @@
-"""Pydantic models for the Marginalia API."""
+"""Pydantic models for the E-BookTrace API."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class HighlightCreate(BaseModel):
     """Incoming highlight from the frontend reader."""
     id: Optional[str] = None
     client_id: Optional[str] = None
+    book_id: Optional[str] = None
     book_title: str
     book_author: str = ""
     chapter: str = ""
@@ -56,6 +57,51 @@ class BookSyncRequest(BaseModel):
     """Pending reader mutations for one canonical server book."""
 
     operations: list[ReaderSyncOperation] = Field(default_factory=list)
+    protocol_version: Optional[int] = None
+
+
+class NoteBatchIdsRequest(BaseModel):
+    operation_id: str = Field(min_length=1, max_length=128)
+    ids: list[str] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def normalize_values(self) -> "NoteBatchIdsRequest":
+        self.operation_id = self.operation_id.strip()
+        self.ids = list(
+            dict.fromkeys(value.strip() for value in self.ids if value.strip())
+        )
+        if not self.operation_id or not self.ids:
+            raise ValueError("operation_id and ids must contain non-whitespace text")
+        return self
+
+
+class NoteBatchTagsRequest(NoteBatchIdsRequest):
+    action: Literal["add", "remove"]
+    tags: list[str] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def normalize_tags(self) -> "NoteBatchTagsRequest":
+        self.tags = list(
+            dict.fromkeys(value.strip() for value in self.tags if value.strip())
+        )
+        if not self.tags:
+            raise ValueError("tags must contain non-whitespace text")
+        return self
+
+
+class NoteBatchItem(BaseModel):
+    id: str
+    client_id: str = ""
+    book_id: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
+    deleted_at: Optional[str] = None
+
+
+class NoteBatchResult(BaseModel):
+    operation_id: str
+    affected: int
+    unchanged: int
+    items: list[NoteBatchItem] = Field(default_factory=list)
 
 
 class HighlightUpdate(BaseModel):

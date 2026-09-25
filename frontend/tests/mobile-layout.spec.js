@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  INDEXED_DB_VERSION,
+  installNotesApiRoutes,
+  makeNote,
+} from './helpers/notes-management.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(__dirname, 'fixtures', 'multichapter.epub');
@@ -20,6 +25,7 @@ async function openFixture(page, url = '/index.html') {
   await page.setInputFiles('#file-input', FIXTURE);
   await expect(page.locator('#toolbar-book-title')).toContainText(/multichapter/i, { timeout: 15_000 });
   await expect(page.locator('#reader-view')).toHaveClass(/active/);
+  await expect(page).toHaveURL(/#\/reader$/);
 }
 
 async function doubleTapIframeWithTouchscreen(page) {
@@ -268,83 +274,110 @@ test.describe('@mobile mobile layout', () => {
     }
   });
 
+  test('opens note detail as a mobile full-screen layer and traps dirty navigation', async ({ page }) => {
+    await installNotesApiRoutes(page, { notes: [makeNote({ highlight_text: '移动测试划线' })] });
+    await page.goto('/index.html');
+    await page.locator('#btn-library-create').click();
+    await expect(page.locator('#creation-view')).toHaveClass(/active/);
+    await expect(page.getByText('移动测试划线')).toBeVisible();
+    const trigger = page.locator('.note-management-card-button');
+    await trigger.click();
+    await expect(page.locator('#notes-detail-pane')).toBeVisible();
+    await expect(page.locator('#btn-close-managed-note')).toBeFocused();
+    const detail = await page.locator('#notes-detail-pane').evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return { width: rect.width, height: rect.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
+    });
+    expect(detail.width).toBeGreaterThanOrEqual(detail.viewportWidth - 2);
+    expect(detail.height).toBeGreaterThanOrEqual(detail.viewportHeight - 2);
+    await page.keyboard.press('Tab');
+    await expect(page.locator('#notes-detail-pane')).toHaveAttribute('aria-modal', 'true');
+    expect(await page.locator('#notes-detail-pane').evaluate(element => element.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.locator('#btn-close-managed-note')).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#notes-detail-pane')).toBeHidden();
+    await expect(trigger).toBeFocused();
+  });
+
   test('keeps the app shell and workspace inside the safe viewport', async ({ page }) => {
     await page.goto('/index.html');
     await expect(page.locator('#library-view')).toHaveClass(/active/);
     await expectNoHorizontalOverflow(page);
 
-    const navigation = await page.locator('.app-nav').boundingBox();
-    const libraryTab = await page.locator('#btn-nav-library').boundingBox();
+    const navigation = await page.locator('.home-nav').boundingBox();
+    const libraryAction = await page.locator('#btn-library-create').boundingBox();
     const viewportHeight = await page.evaluate(() => window.innerHeight);
     expect(navigation).not.toBeNull();
-    expect(libraryTab).not.toBeNull();
-    expect(Math.abs((navigation.y + navigation.height) - viewportHeight)).toBeLessThanOrEqual(2);
-    expect(libraryTab.height).toBeGreaterThanOrEqual(44);
+    expect(libraryAction).not.toBeNull();
+    expect(navigation.y).toBeLessThanOrEqual(2);
+    expect(libraryAction.height).toBeGreaterThanOrEqual(44);
 
-    await page.locator('#btn-nav-create').click();
+    await page.locator('#btn-library-create').click();
     await expect(page.locator('#creation-view')).toHaveClass(/active/);
-    await expect(page.locator('#btn-nav-create')).toHaveClass(/active/);
     await expectNoHorizontalOverflow(page);
 
-    const flowMetrics = await page.evaluate(() => {
-      const steps = document.querySelector('.creation-steps').getBoundingClientRect();
-      const firstPane = document.querySelector('.workspace-pane').getBoundingClientRect();
-      return { stepsHeight: steps.height, stepsBottom: steps.bottom, firstPaneTop: firstPane.top };
+    const shellMetrics = await page.evaluate(() => {
+      const filters = document.querySelector('.notes-filter-row').getBoundingClientRect();
+      const layout = document.querySelector('.notes-management-layout').getBoundingClientRect();
+      const detail = document.querySelector('.notes-detail-pane');
+      return {
+        filtersHeight: filters.height,
+        filtersBottom: filters.bottom,
+        layoutTop: layout.top,
+        detailDisplay: getComputedStyle(detail).display,
+      };
     });
-    expect(flowMetrics.stepsHeight).toBeGreaterThanOrEqual(40);
-    expect(flowMetrics.firstPaneTop).toBeGreaterThanOrEqual(flowMetrics.stepsBottom - 1);
+    expect(shellMetrics.filtersHeight).toBeGreaterThanOrEqual(44);
+    expect(shellMetrics.layoutTop).toBeGreaterThanOrEqual(shellMetrics.filtersBottom - 1);
+    expect(shellMetrics.detailDisplay).toBe('none');
 
-    const paneWidths = await page.locator('.workspace-pane').evaluateAll((panes) => (
-      panes.map((pane) => {
-        const rect = pane.getBoundingClientRect();
+    const shellWidths = await page.locator('.notes-shell-section').evaluateAll((sections) => (
+      sections.map((section) => {
+        const rect = section.getBoundingClientRect();
         return { left: rect.left, right: rect.right, viewport: window.innerWidth };
       })
     ));
-    for (const pane of paneWidths) {
-      expect(pane.left).toBeGreaterThanOrEqual(0);
-      expect(pane.right).toBeLessThanOrEqual(pane.viewport + 1);
+    for (const section of shellWidths) {
+      expect(section.left).toBeGreaterThanOrEqual(0);
+      expect(section.right).toBeLessThanOrEqual(section.viewport + 1);
     }
   });
 
   test('uses a full-height reader and modal mobile tool panels', async ({ page }) => {
     await openFixture(page);
     await expectNoHorizontalOverflow(page);
-    await expect(page.locator('#btn-nav-prev')).toBeHidden();
-    await expect(page.locator('#btn-nav-next')).toBeHidden();
+    await expect(page.locator('#btn-nav-prev, #btn-nav-next')).toHaveCount(0);
+    await expect(page.locator('.reader-footer')).toHaveCount(0);
 
     const readerMetrics = await page.evaluate(() => {
       const host = document.querySelector('#epub-container').getBoundingClientRect();
-      const footer = document.querySelector('.reader-footer').getBoundingClientRect();
-      const nav = document.querySelector('.app-nav').getBoundingClientRect();
+      const toolbar = document.querySelector('.reader-toolbar').getBoundingClientRect();
       return {
         hostHeight: host.height,
+        hostTop: host.top,
         hostBottom: host.bottom,
-        footerTop: footer.top,
-        footerBottom: footer.bottom,
-        navTop: nav.top,
+        toolbarBottom: toolbar.bottom,
+        viewportHeight: window.innerHeight,
       };
     });
     expect(readerMetrics.hostHeight).toBeGreaterThan(400);
-    expect(readerMetrics.hostBottom).toBeLessThanOrEqual(readerMetrics.footerTop + 1);
-    expect(readerMetrics.footerBottom).toBeLessThanOrEqual(readerMetrics.navTop + 1);
+    expect(readerMetrics.hostTop).toBeLessThan(readerMetrics.toolbarBottom);
+    expect(readerMetrics.hostBottom).toBeLessThanOrEqual(readerMetrics.viewportHeight + 1);
+
+    // The v2 directory panel ships collapsed; Task 5 wires its toggling.
+    await expect(page.locator('#reader-navigator')).toBeHidden();
 
     await page.locator('#btn-reader-tools').click();
     await expect(page.locator('#reader-tool-panel')).toBeVisible();
-    await page.locator('#btn-toggle-ai').click();
-    await expect(page.locator('#reader-tool-panel')).toBeHidden();
-    await expect(page.locator('#ai-panel')).toBeVisible();
-    await expect(page.locator('#reader-panel-backdrop')).toBeVisible();
-
-    await page.locator('#btn-close-ai').click();
-    await expect(page.locator('#ai-panel')).toBeHidden();
-    await expect(page.locator('#reader-panel-backdrop')).toBeHidden();
-
-    await page.locator('#btn-reader-tools').click();
+    await expect(page.locator('#btn-toggle-navigator')).toHaveCount(1);
     await page.locator('#btn-toggle-notes').click();
     await expect(page.locator('#notes-panel')).toBeVisible();
-    await expect(page.locator('#ai-panel')).toBeHidden();
+    await expect(page.locator('#reader-tool-panel')).toBeHidden();
+    await expect(page.locator('#reader-panel-backdrop')).toBeVisible();
     await page.locator('#btn-close-notes-panel').click();
     await expect(page.locator('#notes-panel')).toBeHidden();
+    await expect(page.locator('#reader-panel-backdrop')).toBeHidden();
 
     await page.locator('#btn-reader-tools').click();
     await page.locator('#btn-toggle-search').click();
@@ -418,7 +451,7 @@ test.describe('@mobile mobile layout', () => {
     let lastPageInfo = await getReaderPageInfo(page);
     for (let attempt = 0; lastPageInfo && lastPageInfo.current < lastPageInfo.total && attempt < 120; attempt += 1) {
       const previousPage = lastPageInfo.current;
-      await page.locator('#btn-nav-next').dispatchEvent('click');
+      await page.keyboard.press('ArrowRight');
       await expect.poll(async () => (await getReaderPageInfo(page))?.current || 0).toBe(previousPage + 1);
       await page.waitForTimeout(220);
       lastPageInfo = await getReaderPageInfo(page);
@@ -468,20 +501,22 @@ test.describe('@mobile mobile layout', () => {
     await openFixture(page);
     const reader = page.locator('#reader-view');
     const initialHost = await page.locator('#epub-container').boundingBox();
+    const viewportHeight = await page.evaluate(() => window.innerHeight);
+    // v2 shell: no bottom nav; the reader is full-bleed from the start.
+    expect(initialHost.height).toBeGreaterThan(viewportHeight - 120);
     await expect(reader).toHaveClass(/reader-chrome-hidden/, { timeout: 6_000 });
     await expect(page.locator('.reader-toolbar')).toBeHidden();
-    await expect(page.locator('.reader-footer')).toBeHidden();
-    await expect(page.locator('.app-nav')).toBeHidden();
+    await expect(page.locator('.reader-footer')).toHaveCount(0);
     await page.waitForTimeout(350);
 
     const immersiveHost = await page.locator('#epub-container').boundingBox();
-    expect(immersiveHost.height).toBeGreaterThan(initialHost.height + 80);
+    // The reader stays full-bleed; auto-hide removes only the toolbar overlay.
+    expect(immersiveHost.height).toBeGreaterThan(viewportHeight - 120);
 
     await doubleTapIframeWithTouchscreen(page);
     await expect(reader).not.toHaveClass(/reader-chrome-hidden/, { timeout: 1_500 });
     await expect(page.locator('.reader-toolbar')).toBeVisible();
-    await expect(page.locator('.reader-footer')).toBeVisible();
-    await expect(page.locator('.app-nav')).toBeVisible();
+    await expect(page.locator('#btn-reader-tools')).toBeVisible();
     await page.waitForTimeout(850);
 
     await doubleTapIframeWithTouchscreen(page);
@@ -491,8 +526,7 @@ test.describe('@mobile mobile layout', () => {
     await expect(revealButton).toBeVisible();
     const revealBounds = await revealButton.boundingBox();
     expect(revealBounds).not.toBeNull();
-    await expect(page.locator('#btn-nav-prev')).toBeHidden();
-    await expect(page.locator('#btn-nav-next')).toBeHidden();
+    await expect(page.locator('#btn-nav-prev, #btn-nav-next')).toHaveCount(0);
     await revealButton.click();
     await expect(reader).not.toHaveClass(/reader-chrome-hidden/);
   });
@@ -609,8 +643,8 @@ test.describe('@mobile mobile layout', () => {
     await expect(toolbar).toBeHidden();
     await expect(page.locator('#notes-count')).toHaveText('1 条');
 
-    const savedHighlight = await page.evaluate(() => new Promise((resolve, reject) => {
-      const request = indexedDB.open('marginalia', 5);
+    const savedHighlight = await page.evaluate(databaseVersion => new Promise((resolve, reject) => {
+      const request = indexedDB.open('marginalia', databaseVersion);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const db = request.result;
@@ -620,7 +654,7 @@ test.describe('@mobile mobile layout', () => {
         allRequest.onerror = () => reject(allRequest.error);
         transaction.oncomplete = () => db.close();
       };
-    }));
+    }), INDEXED_DB_VERSION);
     expect(savedHighlight.highlight_text).toBe(selectedText);
     expect(savedHighlight.cfi).toMatch(/^epubcfi\(.*,.+,.+\)$/);
     expect(savedHighlight.color).toBe('yellow');

@@ -1,7 +1,7 @@
-# Marginalia 家庭访问部署手册
+# E-书痕 / E-BookTrace 家庭访问部署手册
 
 目标地址为 `https://read.zengziyang.com`。公网身份验证完全由
-Cloudflare Access 承担；Marginalia 本身仍是家庭共享账户，API 不直接暴露端口。
+Cloudflare Access 承担；E-书痕本身仍是家庭共享账户，API 不直接暴露端口。兼容性的 `Marginalia` 脚本名、备份路径和任务名保持不变。
 
 ## 当前本地边界
 

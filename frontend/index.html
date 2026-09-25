@@ -4,36 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#2f3a32">
-  <meta name="description" content="Marginalia - 阅读划线、读书感悟、内容创作与 Obsidian 导出">
+  <meta name="description" content="E-书痕（E-BookTrace）- 阅读划线、读书感悟与笔记管理">
   <link rel="manifest" href="manifest.json">
-  <title>Marginalia</title>
-  <link rel="stylesheet" href="style.css?v=24">
+  <title>E-书痕 · E-BookTrace</title>
+  <link rel="stylesheet" href="style.css?v=45">
   <script src="jszip.min.js"></script>
   <script src="epub.min.js"></script>
 </head>
 <body>
   <div id="app" class="app-container">
-    <nav class="app-nav" aria-label="主导航">
-      <div class="brand">
-        <span class="brand-mark">M</span>
-        <div class="brand-copy">
-          <strong>Marginalia</strong>
-          <span>从阅读到成稿</span>
-        </div>
-      </div>
-      <div class="nav-tabs">
-        <button class="nav-tab active" id="btn-nav-library" type="button">
-          <span class="nav-tab-icon" aria-hidden="true">▤</span><span>书库</span>
-        </button>
-        <button class="nav-tab" id="btn-nav-read" type="button">
-          <span class="nav-tab-icon" aria-hidden="true">◇</span><span>阅读</span>
-        </button>
-        <button class="nav-tab" id="btn-nav-create" type="button">
-          <span class="nav-tab-icon" aria-hidden="true">✎</span><span>创作</span>
-        </button>
-      </div>
-    </nav>
-
     <section class="operation-status" id="operation-status" aria-live="polite" hidden>
       <div class="operation-status-copy">
         <strong id="operation-status-message">正在处理书籍…</strong>
@@ -44,37 +23,57 @@
         <div class="operation-status-progress-bar" id="operation-status-progress-bar"></div>
       </div>
       <button class="btn btn-ghost btn-sm" id="btn-operation-retry" type="button" hidden>重试上传</button>
-      <button class="operation-status-close" id="btn-operation-close" type="button" title="关闭提示">×</button>
+      <button class="operation-status-close" id="btn-operation-close" type="button" title="关闭提示" aria-label="关闭状态提示">×</button>
     </section>
 
     <div id="library-view" class="view active">
+      <header class="home-nav">
+        <div class="brand">
+          <span class="brand-mark">E</span>
+          <div class="brand-copy">
+            <strong>E-书痕</strong>
+            <span>E-BookTrace · 让阅读留下边注</span>
+          </div>
+        </div>
+        <span class="home-nav-label">主界面</span>
+      </header>
       <header class="library-header">
         <div class="page-heading">
           <span class="eyebrow">Library</span>
-          <h1 class="app-title">你的阅读素材库</h1>
-          <p class="app-subtitle">导入 EPUB，阅读时划线，沉淀感悟，再把素材送进创作工作台。</p>
+          <h1 class="app-title"><span>你的阅读</span><strong>素材库</strong></h1>
+          <p class="app-subtitle">导入 EPUB，阅读时划线，沉淀感悟，整理并导出读书笔记。</p>
+          <div class="library-flow" aria-label="阅读工作流">
+            <span><b>01</b> 安静阅读</span>
+            <span><b>02</b> 留下边注</span>
+            <span><b>03</b> 整理笔记</span>
+          </div>
         </div>
         <div class="library-actions">
-          <label class="btn btn-primary import-btn">
+          <label class="btn btn-primary import-btn" tabindex="0" role="button">
             导入 EPUB
             <input type="file" id="file-input" accept=".epub" hidden>
           </label>
-          <button class="btn btn-secondary" id="btn-library-create" type="button">进入创作</button>
+          <a class="btn btn-secondary" id="btn-book-chat" href="/book-chat/">GPT 风格阅读</a>
+          <button class="btn btn-secondary" id="btn-library-create" type="button">笔记管理</button>
         </div>
       </header>
 
       <main class="book-list" id="book-list">
         <div class="empty-state" id="empty-library">
-          <div class="empty-icon">M</div>
-          <p>还没有书</p>
-          <p class="empty-hint">导入一本 EPUB，或把 EPUB 放到 backend/data/books 后刷新页面。</p>
+          <div class="empty-icon" aria-hidden="true">E</div>
+          <p class="empty-state-title">从一本书开始</p>
+          <p class="empty-hint">导入 EPUB，把阅读、边注与感悟留在同一间数字书斋。也可把 EPUB 放到 backend/data/books 后刷新页面。</p>
+          <label class="btn btn-primary empty-import-btn" for="file-input">导入第一本书</label>
         </div>
       </main>
     </div>
 
     <div id="reader-view" class="view">
       <div class="reader-toolbar">
-        <button class="btn btn-ghost" id="btn-back" title="返回书库" type="button">返回书库</button>
+        <div class="reader-toolbar-leading">
+          <button class="btn btn-ghost" id="btn-back" title="返回主界面" type="button" aria-label="返回主界面">←</button>
+          <span class="reader-product-name">E-书痕</span>
+        </div>
         <div class="toolbar-info">
           <span class="book-title-label" id="toolbar-book-title">未打开书籍</span>
           <span class="chapter-label" id="toolbar-chapter">选择一本书开始阅读</span>
@@ -87,8 +86,8 @@
 
       <div class="reader-tool-panel" id="reader-tool-panel" hidden>
         <div class="reader-tool-actions" aria-label="阅读工具">
-          <button class="btn btn-ghost" id="btn-toggle-ai" title="切换 AI 问答面板" type="button"
-                  aria-expanded="false" aria-controls="ai-panel">AI 问答</button>
+          <button class="btn btn-ghost" id="btn-toggle-navigator" title="切换目录与书签" type="button"
+                  aria-expanded="false" aria-controls="reader-navigator">目录与书签</button>
           <button class="btn btn-ghost" id="btn-add-bookmark" title="添加当前位置为书签" type="button">书签</button>
           <button class="btn btn-ghost" id="btn-toggle-notes" title="切换划线面板" type="button"
                   aria-expanded="false" aria-controls="notes-panel">划线面板</button>
@@ -96,42 +95,98 @@
                   aria-expanded="false" aria-controls="search-panel">搜索</button>
           <button class="btn btn-ghost" id="btn-toggle-reader-auto-hide" title="切换阅读控制栏自动收起" type="button"
                   aria-pressed="true">自动收起：开</button>
+          <button class="btn btn-ghost btn-sync" id="btn-sync" disabled type="button">
+            <span class="sync-label">同步</span>
+            <span class="sync-badge" id="sync-badge" hidden>0</span>
+          </button>
         </div>
+        <section class="reader-typography" aria-labelledby="reader-typography-title">
+          <div class="reader-typography-heading">
+            <strong id="reader-typography-title">阅读排版</strong>
+            <span>仅调整正文显示，不改变书籍内容</span>
+          </div>
+          <div class="reader-typography-fields">
+            <label class="reader-font-family-field" for="reader-font-family">
+              <span>阅读字体</span>
+              <select id="reader-font-family">
+                <option value="original">原书排版</option>
+                <option value="serif">宋体</option>
+                <option value="sans">黑体</option>
+                <option value="kai">楷体</option>
+              </select>
+            </label>
+            <div class="reader-font-size-field" role="group" aria-labelledby="reader-font-size-label">
+              <div class="reader-typography-value-row">
+                <span id="reader-font-size-label">正文字号</span>
+                <output id="reader-font-size-value" for="reader-font-size">100%</output>
+              </div>
+              <div class="reader-font-size-controls">
+                <button class="btn btn-ghost reader-font-step" id="btn-reader-font-decrease" type="button" aria-label="减小正文字号">A−</button>
+                <input id="reader-font-size" type="range" min="60" max="200" step="5" value="100" aria-label="正文字号百分比">
+                <button class="btn btn-ghost btn-sm" id="btn-reader-font-reset" type="button">恢复默认</button>
+                <button class="btn btn-ghost reader-font-step" id="btn-reader-font-increase" type="button" aria-label="增大正文字号">A＋</button>
+              </div>
+            </div>
+            <div class="reader-spacing-field" role="group" aria-labelledby="reader-line-height-label">
+              <div class="reader-typography-value-row">
+                <span id="reader-line-height-label">行间距</span>
+                <output id="reader-line-height-value" for="reader-line-height">1.7</output>
+              </div>
+              <div class="reader-spacing-controls">
+                <input id="reader-line-height" type="range" min="1.2" max="2.4" step="0.1" value="1.7" aria-label="正文行间距">
+                <button class="btn btn-ghost btn-sm" id="btn-reader-line-height-reset" type="button">恢复默认</button>
+              </div>
+            </div>
+            <div class="reader-spacing-field" role="group" aria-labelledby="reader-paragraph-spacing-label">
+              <div class="reader-typography-value-row">
+                <span id="reader-paragraph-spacing-label">段落间距</span>
+                <output id="reader-paragraph-spacing-value" for="reader-paragraph-spacing">0.5em</output>
+              </div>
+              <div class="reader-spacing-controls">
+                <input id="reader-paragraph-spacing" type="range" min="0" max="2" step="0.1" value="0.5" aria-label="正文段落间距">
+                <button class="btn btn-ghost btn-sm" id="btn-reader-paragraph-spacing-reset" type="button">恢复默认</button>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
 
-      <div class="reader-main ai-collapsed notes-collapsed">
-        <aside class="ai-panel collapsed" id="ai-panel">
-          <div class="ai-panel-header">
-            <div>
-              <h3>AI 问答</h3>
-              <p id="ai-index-status">正在检查书籍索引…</p>
+      <aside class="reader-navigator collapsed" id="reader-navigator" aria-label="目录与书签" aria-hidden="true">
+        <div class="reader-navigator-header">
+          <div>
+            <span class="eyebrow">Navigation</span>
+            <h3>目录与书签</h3>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="btn-close-navigator" type="button" aria-label="收起目录与书签">收起</button>
+        </div>
+        <div class="reader-navigator-content">
+          <section class="toc-section" aria-labelledby="toc-heading">
+            <div class="navigator-section-heading" id="toc-heading">章节目录</div>
+            <nav class="toc-list" id="toc-list" aria-label="章节目录">
+              <div class="empty-toc">正在读取目录…</div>
+            </nav>
+          </section>
+          <section class="bookmarks-section" aria-labelledby="bookmarks-heading">
+            <div class="navigator-section-heading" id="bookmarks-heading">
+              <span>书签</span>
+              <span class="bookmarks-count" id="bookmarks-count">0</span>
             </div>
-            <button class="btn btn-ghost btn-sm" id="btn-close-ai" type="button">收起</button>
-          </div>
-          <div class="ai-conversation-bar">
-            <select id="ai-conversation-select" aria-label="选择 AI 会话">
-              <option value="">新会话</option>
-            </select>
-            <button class="btn btn-ghost btn-sm" id="btn-new-ai-conversation" type="button" title="新建会话">新建</button>
-            <button class="btn btn-ghost btn-sm" id="btn-delete-ai-conversation" type="button" title="删除当前会话" disabled>删除</button>
-            <button class="btn btn-ghost btn-sm" id="btn-retry-ai-index" type="button" hidden>重试索引</button>
-          </div>
-          <div class="ai-quick-actions">
-            <button type="button" data-ai-question="解释这一章的核心意思">解释这一章</button>
-            <button type="button" data-ai-question="总结这本书目前出现的核心观点">总结核心观点</button>
-            <button type="button" data-ai-question="我应该怎么理解最近的划线？">理解划线</button>
-          </div>
-          <div class="ai-messages" id="ai-messages">
-            <div class="ai-empty">问一个和这本书有关的问题。</div>
-          </div>
-          <form class="ai-input-row" id="ai-form">
-            <textarea id="ai-question-input" rows="3" placeholder="例如：这一章在讲什么？"></textarea>
-            <button class="btn btn-primary" id="btn-send-ai" type="submit">发送</button>
-          </form>
-        </aside>
+            <div class="bookmarks-list" id="bookmarks-list">
+              <div class="empty-bookmarks">还没有书签</div>
+            </div>
+          </section>
+        </div>
+        <div class="reader-location" aria-label="当前位置">
+          <span class="progress-text" id="progress-text">0%</span>
+          <span class="page-text" id="page-text">页码计算中...</span>
+        </div>
+      </aside>
+
+      <button class="reader-navigator-reveal" id="btn-reveal-navigator" type="button"
+              aria-label="展开目录与书签" title="展开目录与书签">目录</button>
+
+      <div class="reader-main notes-collapsed">
         <div class="reader-viewport">
-          <button class="nav-btn nav-btn-prev" id="btn-nav-prev" title="上一页" type="button">&lsaquo;</button>
-          <button class="nav-btn nav-btn-next" id="btn-nav-next" title="下一页" type="button">&rsaquo;</button>
           <div class="reader-epub-host" id="epub-container">
           <div class="reader-loading" id="reader-loading" role="status" aria-live="polite" hidden>
             <div class="reader-loading-spinner" aria-hidden="true"></div>
@@ -167,22 +222,13 @@
           <div class="notes-panel-header">
             <div>
               <h3>划线与感悟</h3>
-              <p>单击跳回原文，双击编辑感悟。</p>
+              <p>展开后可定位原文或编辑感悟。</p>
             </div>
             <div class="notes-panel-actions">
               <span class="notes-count" id="notes-count">0 条</span>
               <button class="btn btn-ghost btn-sm mobile-panel-close" id="btn-close-notes-panel" type="button">关闭</button>
             </div>
           </div>
-          <section class="bookmarks-section" aria-label="书签">
-            <div class="bookmarks-heading">
-              <span>书签</span>
-              <span class="bookmarks-count" id="bookmarks-count">0</span>
-            </div>
-            <div class="bookmarks-list" id="bookmarks-list">
-              <div class="empty-bookmarks">还没有书签</div>
-            </div>
-          </section>
           <div class="notes-list" id="notes-list">
             <div class="empty-notes">
               <p>选中文字开始划线</p>
@@ -192,105 +238,137 @@
         </aside>
       </div>
 
+      <button class="reader-notes-reveal" id="btn-reveal-notes" type="button"
+              aria-label="展开划线与感悟" title="展开划线与感悟">划线</button>
+
       <button class="reader-panel-backdrop" id="reader-panel-backdrop" type="button"
               aria-label="关闭阅读工具面板" hidden></button>
 
       <button class="reader-chrome-reveal" id="btn-reveal-reader-chrome" type="button"
-              aria-label="显示阅读控制栏" title="显示阅读控制栏">显示</button>
+              aria-label="显示阅读控制栏" title="显示阅读控制栏">工具栏</button>
 
-      <div class="reader-footer">
-        <div class="progress-info">
-          <input type="range" id="progress-slider" min="0" max="100" value="0" class="progress-slider" aria-label="阅读进度">
-          <span class="progress-text" id="progress-text">0%</span>
-          <span class="page-text" id="page-text">页码计算中...</span>
-        </div>
-        <button class="btn btn-sync" id="btn-sync" disabled type="button">
-          <span class="sync-label">同步</span>
-          <span class="sync-badge" id="sync-badge" hidden>0</span>
-        </button>
-      </div>
     </div>
 
     <div id="creation-view" class="view">
-      <header class="creation-header">
+      <header class="creation-header notes-management-header notes-shell-section">
+        <button class="btn btn-ghost" id="btn-notes-back" type="button">返回主界面</button>
         <div class="page-heading">
-          <span class="eyebrow">Studio</span>
-          <h1>创作工作台</h1>
-          <p>挑选划线素材，补充个人感悟，再生成可继续修改的内容草稿。</p>
+          <span class="eyebrow">Notes</span>
+          <h1>笔记管理</h1>
+          <p>集中整理划线、感悟与同步状态。</p>
         </div>
-        <div class="creation-actions">
-          <button class="btn btn-primary" id="btn-refresh-materials" type="button">刷新素材</button>
-          <button class="btn btn-secondary" id="btn-export-book" type="button">导出书籍到 Obsidian</button>
+        <div class="creation-actions notes-management-actions">
+          <span class="notes-data-status" id="notes-data-status">尚未加载笔记</span>
+          <button class="btn btn-primary" id="btn-export-notes-markdown" type="button" aria-describedby="notes-export-help">导出 Markdown</button>
+          <span class="visually-hidden" id="notes-export-help">在线导出完整筛选结果；离线导出可能不完整。待同步和回收站视图不可导出。</span>
+          <button class="btn btn-secondary" id="btn-toggle-notes-trash" type="button" aria-pressed="false">回收站</button>
         </div>
       </header>
 
-      <div class="creation-steps" aria-label="创作步骤">
-        <span class="creation-step is-active">摘录</span>
-        <span class="creation-step">判断</span>
-        <span class="creation-step">成稿</span>
-        <span class="creation-step">入库</span>
-      </div>
+      <section class="notes-filter-row notes-shell-section" aria-label="筛选笔记">
+        <label class="notes-search-field">
+          <span>搜索笔记</span>
+          <input id="notes-search" type="search" placeholder="搜索划线或感悟">
+        </label>
+        <label>
+          <span>书籍</span>
+          <select id="notes-book-filter"><option value="">全部书籍</option></select>
+        </label>
+        <label>
+          <span>标签</span>
+          <select id="notes-tag-filter"><option value="">全部标签</option></select>
+        </label>
+        <label>
+          <span>内容类型</span>
+          <select id="notes-kind-filter">
+            <option value="">全部类型</option>
+            <option value="highlight">仅划线</option>
+            <option value="reflected">有感悟</option>
+          </select>
+        </label>
+        <label>
+          <span>高亮颜色</span>
+          <select id="notes-color-filter"><option value="">全部颜色</option><option value="yellow">黄色</option><option value="green">绿色</option><option value="blue">蓝色</option><option value="pink">粉色</option></select>
+        </label>
+        <label>
+          <span>排序</span>
+          <select id="notes-sort">
+            <option value="updated_desc">最近更新</option>
+            <option value="created_desc">最近创建</option>
+            <option value="book">书名</option>
+            <option value="position">阅读位置</option>
+          </select>
+        </label>
+        <label class="notes-pending-filter">
+          <span>数据范围</span>
+          <select id="notes-pending-only">
+            <option value="all">全部数据</option>
+            <option value="pending">待同步</option>
+          </select>
+        </label>
+        <button class="btn btn-ghost" id="btn-clear-note-filters" type="button">清空筛选</button>
+      </section>
 
-      <div class="creation-layout">
-        <aside class="materials-pane workspace-pane">
-          <div class="pane-heading">
-            <div>
-              <span class="eyebrow">Materials</span>
-              <h2>素材库</h2>
-              <p>从阅读划线中选择本次要展开的观点。</p>
+      <section class="notes-batch-bar notes-shell-section" aria-label="批量操作">
+        <label><input id="notes-select-page" type="checkbox" aria-label="全选当前页"> 全选当前页</label>
+        <strong id="notes-selection-count">已选择 0 条</strong>
+        <button class="btn btn-secondary btn-sm" id="btn-batch-add-tag" type="button" disabled>添加标签</button>
+        <button class="btn btn-secondary btn-sm" id="btn-batch-remove-tag" type="button" disabled>移除标签</button>
+        <button class="btn btn-danger btn-sm" id="btn-batch-trash" type="button" disabled>移入回收站</button>
+      </section>
+
+      <section class="notes-trash-actions notes-shell-section" id="notes-trash-actions" aria-label="回收站操作" hidden>
+        <button class="btn btn-secondary" id="btn-batch-restore" type="button" disabled>恢复</button>
+        <button class="btn btn-danger" id="btn-batch-delete" type="button" disabled>永久删除</button>
+        <button class="btn btn-danger" id="btn-empty-trash" type="button">清空回收站</button>
+      </section>
+
+      <main class="notes-management-layout notes-shell-section">
+        <section class="notes-list-pane" aria-label="笔记列表">
+          <div class="notes-management-list" id="notes-management-list">
+            <div class="empty-state notes-empty-state">
+              <p>还没有可显示的笔记</p>
+              <p class="empty-hint">数据加载将在下一阶段接入。</p>
             </div>
           </div>
-          <div class="pane-toolbar">
-            <input type="search" id="material-book-filter" placeholder="按书名筛选">
-            <input type="search" id="material-tag-filter" placeholder="按标签筛选">
+          <nav class="notes-pagination" aria-label="笔记分页">
+            <button class="btn btn-ghost btn-sm" id="btn-notes-previous" type="button" disabled>上一页</button>
+            <span id="notes-page-status">第 1 页</span>
+            <button class="btn btn-ghost btn-sm" id="btn-notes-next" type="button" disabled>下一页</button>
+          </nav>
+        </section>
+        <aside class="notes-detail-pane" id="notes-detail-pane" aria-label="笔记详情">
+          <div class="empty-state">
+            <p>选择一条笔记查看详情</p>
+            <p class="empty-hint">可编辑感悟、标签和高亮颜色。</p>
           </div>
-          <div class="materials-list" id="materials-list"></div>
         </aside>
+      </main>
 
-        <section class="reflection-pane workspace-pane paper-pane">
-          <div class="pane-heading">
-            <div>
-              <span class="eyebrow">Reflection</span>
-              <h2>感悟编辑</h2>
-              <p>把摘录变成自己的判断、故事或选题角度。</p>
-            </div>
-            <span id="selected-material-count">0 条已选</span>
+      <div id="notes-unsaved-dialog" class="modal-overlay" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="notes-unsaved-title">
+          <div class="modal-header"><h3 id="notes-unsaved-title">有未保存的修改</h3></div>
+          <div class="modal-body"><p>离开前要如何处理当前修改？</p></div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" type="button">取消</button>
+            <button class="btn btn-secondary" type="button">放弃修改</button>
+            <button class="btn btn-primary" type="button">保存并继续</button>
           </div>
-          <div id="selected-material-detail" class="selected-material-detail">
-            <p class="empty-hint">从左侧选择一条素材后编辑感悟；勾选多条素材后生成稿件。</p>
-          </div>
-          <textarea id="reflection-editor" placeholder="写下你的理解、反驳、生活案例，或适合展开成内容的角度。" aria-label="感悟编辑"></textarea>
-          <div class="reflection-actions">
-            <button class="btn btn-danger" id="btn-delete-reflection" disabled type="button">删除感悟</button>
-            <button class="btn btn-primary" id="btn-save-reflection" disabled type="button">保存感悟</button>
-          </div>
-        </section>
-
-        <section class="draft-pane workspace-pane editor-pane">
-          <div class="pane-heading">
-            <div>
-              <span class="eyebrow">Drafts</span>
-              <h2>稿件生成</h2>
-              <p>基于勾选素材生成草稿，保留人工修改空间。</p>
-            </div>
-          </div>
-          <input type="text" id="draft-topic" placeholder="选题主题，可留空" aria-label="选题主题">
-          <textarea id="draft-instruction" placeholder="额外要求，例如：更口语化、加入个人经历、控制在 90 秒。" aria-label="稿件额外要求"></textarea>
-          <div class="draft-actions">
-            <button class="btn btn-primary" id="btn-generate-video" type="button">生成视频号稿</button>
-            <button class="btn btn-primary" id="btn-generate-article" type="button">生成公众号稿</button>
-          </div>
-          <div class="draft-list" id="draft-list"></div>
-          <div class="draft-editor" id="draft-editor" hidden>
-            <input type="text" id="draft-title-editor" placeholder="稿件标题" aria-label="稿件标题">
-            <textarea id="draft-content-editor" placeholder="稿件正文" aria-label="稿件正文"></textarea>
-            <div class="draft-actions">
-              <button class="btn btn-primary" id="btn-save-draft" type="button">保存草稿</button>
-              <button class="btn btn-secondary" id="btn-export-draft" type="button">导出草稿到 Obsidian</button>
-            </div>
-          </div>
-        </section>
+        </div>
       </div>
+
+      <div id="notes-count-confirm-dialog" class="modal-overlay" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="notes-count-confirm-title">
+          <div class="modal-header"><h3 id="notes-count-confirm-title">确认批量操作</h3></div>
+          <div class="modal-body"><p id="notes-count-confirm-message">将处理 0 条笔记。</p><label id="notes-batch-tag-field" hidden>批量标签<input id="notes-batch-tags" aria-label="批量标签" placeholder="标签，用逗号分隔"></label></div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" type="button">取消</button>
+            <button class="btn btn-danger" type="button">确认</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="visually-hidden" id="notes-live-status" role="status" aria-live="polite">笔记管理页面已打开</p>
     </div>
 
     <div id="selection-toolbar" class="selection-toolbar" hidden>
@@ -342,6 +420,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=42"></script>
 </body>
 </html>

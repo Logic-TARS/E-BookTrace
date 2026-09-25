@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-Marginalia is a local-first reading and creation workflow: **EPUB highlights -> Backend API -> Notes Library -> Scripts, Drafts, and Obsidian exports**. A browser PWA lets users read EPUBs, create color-coded highlights with inline notes/tags, and sync them to a FastAPI/SQLite backend.
+E-书痕 (E-BookTrace) is a local-first reading and creation workflow; legacy `marginalia` machine identifiers remain for compatibility: **EPUB highlights -> Backend API -> Notes Library -> Scripts, Drafts, and Obsidian exports**. A browser PWA lets users read EPUBs, create color-coded highlights with inline notes/tags, and sync them to a FastAPI/SQLite backend.
 
 ## Commands
 

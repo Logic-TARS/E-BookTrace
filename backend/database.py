@@ -1,18 +1,41 @@
-"""SQLite storage layer for Marginalia highlights."""
+"""SQLite storage layer for E-BookTrace highlights."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
+import sqlite3
 from typing import Any, Optional
 import uuid
 
 import aiosqlite
 
 from config import settings
+from notes import normalize_note_tags
 
 # Ensure data directory exists
-DB_PATH = Path(__file__).parent / "data" / "marginalia.db"
+SQLITE_URL_PREFIX = "sqlite+aiosqlite:///"
+DEFAULT_DB_PATH = Path(__file__).parent / "data" / "marginalia.db"
+
+
+def _resolve_db_path() -> Path:
+    """Read the database location from DATABASE_URL.
+
+    aiosqlite wants a plain filesystem path, so strip the SQLAlchemy-style
+    prefix. Unset or unrecognised values fall back to the original location,
+    which keeps existing deployments pointing at the same file.
+    """
+    url = (settings.database_url or "").strip()
+    if url.startswith(SQLITE_URL_PREFIX):
+        candidate = url[len(SQLITE_URL_PREFIX):]
+        if candidate:
+            return Path(candidate)
+    return DEFAULT_DB_PATH
+
+
+DB_PATH = _resolve_db_path()
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 LEGACY_EXTERNAL_SYNC_COLUMN = "synced_to_" + "fei" + "shu"
 
@@ -46,6 +69,7 @@ async def init_db() -> None:
         await _ensure_column(db, "updated_at", "TEXT")
         await _ensure_column(db, "status", "TEXT DEFAULT 'raw'")
         await _ensure_column(db, "knowledge_book_id", "TEXT")
+        await _ensure_column(db, "deleted_at", "TEXT")
         await db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_highlights_client_id
@@ -56,6 +80,25 @@ async def init_db() -> None:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_highlights_book_id ON highlights(book_id)"
         )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_highlights_view_updated
+            ON highlights(deleted_at, updated_at DESC)
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_highlights_view_book
+            ON highlights(deleted_at, book_id)
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_highlights_view_position
+            ON highlights(deleted_at, book_title, progress_percent)
+            """
+        )
+        await _ensure_notes_fts(db, rebuild=True)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS drafts (
                 id TEXT PRIMARY KEY,
@@ -69,6 +112,15 @@ async def init_db() -> None:
                 exported_to_obsidian INTEGER DEFAULT 0
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS note_batch_operations (
+                operation_id TEXT PRIMARY KEY,
+                operation_type TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
         await db.commit()
 
 
@@ -77,6 +129,69 @@ async def _ensure_column(db: aiosqlite.Connection, name: str, definition: str) -
     columns = {row[1] for row in rows}
     if name not in columns:
         await db.execute(f"ALTER TABLE highlights ADD COLUMN {name} {definition}")
+
+
+async def _ensure_notes_fts(
+    db: aiosqlite.Connection, *, rebuild: bool = False
+) -> bool:
+    try:
+        await db.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS highlights_notes_fts
+            USING fts5(
+                book_title, book_author, chapter, highlight_text, note, tags,
+                content='highlights', content_rowid='rowid', tokenize='trigram'
+            )
+            """
+        )
+        await db.executescript(
+            """
+            CREATE TRIGGER IF NOT EXISTS highlights_notes_fts_insert
+            AFTER INSERT ON highlights BEGIN
+                INSERT INTO highlights_notes_fts(
+                    rowid, book_title, book_author, chapter,
+                    highlight_text, note, tags
+                ) VALUES (
+                    new.rowid, new.book_title, new.book_author, new.chapter,
+                    new.highlight_text, new.note, new.tags
+                );
+            END;
+            CREATE TRIGGER IF NOT EXISTS highlights_notes_fts_delete
+            AFTER DELETE ON highlights BEGIN
+                INSERT INTO highlights_notes_fts(
+                    highlights_notes_fts, rowid, book_title, book_author,
+                    chapter, highlight_text, note, tags
+                ) VALUES (
+                    'delete', old.rowid, old.book_title, old.book_author,
+                    old.chapter, old.highlight_text, old.note, old.tags
+                );
+            END;
+            CREATE TRIGGER IF NOT EXISTS highlights_notes_fts_update
+            AFTER UPDATE ON highlights BEGIN
+                INSERT INTO highlights_notes_fts(
+                    highlights_notes_fts, rowid, book_title, book_author,
+                    chapter, highlight_text, note, tags
+                ) VALUES (
+                    'delete', old.rowid, old.book_title, old.book_author,
+                    old.chapter, old.highlight_text, old.note, old.tags
+                );
+                INSERT INTO highlights_notes_fts(
+                    rowid, book_title, book_author, chapter,
+                    highlight_text, note, tags
+                ) VALUES (
+                    new.rowid, new.book_title, new.book_author, new.chapter,
+                    new.highlight_text, new.note, new.tags
+                );
+            END;
+            """
+        )
+        if rebuild:
+            await db.execute(
+                "INSERT INTO highlights_notes_fts(highlights_notes_fts) VALUES ('rebuild')"
+            )
+        return True
+    except (sqlite3.OperationalError, aiosqlite.OperationalError):
+        return False
 
 
 async def save_highlights(highlights: list[dict]) -> list[str]:
@@ -199,20 +314,304 @@ async def _find_existing_highlight_id(
     return None
 
 
+def _build_notes_where(
+    *,
+    q: str | None,
+    book_id: str | None,
+    tags: list[str],
+    note_kind: str,
+    color: str | None,
+    view: str,
+    ignore_book_filter: bool = False,
+    ignore_tag_filter: bool = False,
+    use_fts: bool = False,
+) -> tuple[str, list[Any]]:
+    clauses = [
+        "highlights.deleted_at IS NOT NULL"
+        if view == "trash"
+        else "highlights.deleted_at IS NULL"
+    ]
+    params: list[Any] = []
+
+    if q:
+        if use_fts:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM highlights_notes_fts "
+                "WHERE highlights_notes_fts.rowid = highlights.rowid "
+                "AND highlights_notes_fts MATCH ?)"
+            )
+            params.append(f'"{q.replace(chr(34), chr(34) * 2)}"')
+        else:
+            pattern = f"%{q}%"
+            clauses.append(
+                "(highlights.book_title LIKE ? OR highlights.book_author LIKE ? "
+                "OR highlights.chapter LIKE ? OR highlights.highlight_text LIKE ? "
+                "OR highlights.note LIKE ? OR highlights.tags LIKE ?)"
+            )
+            params.extend([pattern] * 6)
+
+    if book_id and not ignore_book_filter:
+        clauses.append("highlights.book_id = ?")
+        params.append(book_id)
+
+    for tag in ([] if ignore_tag_filter else tags):
+        clauses.append(
+            "EXISTS (SELECT 1 FROM json_each(highlights.tags) "
+            "WHERE json_each.value = ?)"
+        )
+        params.append(tag)
+
+    if note_kind == "reflected":
+        clauses.append("TRIM(COALESCE(highlights.note, '')) <> ''")
+    elif note_kind == "highlight_only":
+        clauses.append("TRIM(COALESCE(highlights.note, '')) = ''")
+
+    if color:
+        clauses.append("highlights.color = ?")
+        params.append(color)
+
+    return " AND ".join(clauses), params
+
+
+_NOTES_SORTS = {
+    "updated_desc": "highlights.updated_at DESC, highlights.id ASC",
+    "created_desc": "highlights.created_at DESC, highlights.id ASC",
+    "position": "highlights.progress_percent ASC, highlights.id ASC",
+    "book": "highlights.book_title COLLATE NOCASE ASC, highlights.id ASC",
+}
+
+
+async def _notes_fts_available(db: aiosqlite.Connection, q: str | None) -> bool:
+    if not q or len(q) < 3:
+        return False
+    try:
+        return await _ensure_notes_fts(db)
+    except (sqlite3.OperationalError, aiosqlite.OperationalError):
+        return False
+
+
+async def _notes_rows(
+    db: aiosqlite.Connection,
+    *,
+    q: str | None,
+    book_id: str | None,
+    tags: list[str],
+    note_kind: str,
+    color: str | None,
+    view: str,
+    order_by: str,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[aiosqlite.Row]:
+    use_fts = await _notes_fts_available(db, q)
+    where, params = _build_notes_where(
+        q=q,
+        book_id=book_id,
+        tags=tags,
+        note_kind=note_kind,
+        color=color,
+        view=view,
+        use_fts=use_fts,
+    )
+    query = f"SELECT highlights.* FROM highlights WHERE {where} ORDER BY {order_by}"
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+    try:
+        return await db.execute_fetchall(query, params)
+    except (sqlite3.OperationalError, aiosqlite.OperationalError):
+        if not use_fts:
+            raise
+        where, params = _build_notes_where(
+            q=q,
+            book_id=book_id,
+            tags=tags,
+            note_kind=note_kind,
+            color=color,
+            view=view,
+        )
+        query = f"SELECT highlights.* FROM highlights WHERE {where} ORDER BY {order_by}"
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        return await db.execute_fetchall(query, params)
+
+
+async def list_notes(
+    *,
+    q: str | None = None,
+    book_id: str | None = None,
+    tags: list[str] | None = None,
+    note_kind: str = "all",
+    color: str | None = None,
+    view: str = "active",
+    sort: str = "updated_desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    normalized_tags = tags or []
+    normalized_limit = max(0, limit)
+    normalized_offset = max(0, offset)
+    order_by = _NOTES_SORTS.get(sort, _NOTES_SORTS["updated_desc"])
+
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        use_fts = await _notes_fts_available(db, q)
+        where, params = _build_notes_where(
+            q=q,
+            book_id=book_id,
+            tags=normalized_tags,
+            note_kind=note_kind,
+            color=color,
+            view=view,
+            use_fts=use_fts,
+        )
+        try:
+            total_row = await db.execute_fetchall(
+                f"SELECT COUNT(*) FROM highlights WHERE {where}", params
+            )
+        except (sqlite3.OperationalError, aiosqlite.OperationalError):
+            use_fts = False
+            where, params = _build_notes_where(
+                q=q,
+                book_id=book_id,
+                tags=normalized_tags,
+                note_kind=note_kind,
+                color=color,
+                view=view,
+            )
+            total_row = await db.execute_fetchall(
+                f"SELECT COUNT(*) FROM highlights WHERE {where}", params
+            )
+        total = total_row[0][0]
+        rows = await db.execute_fetchall(
+            f"SELECT highlights.* FROM highlights WHERE {where} "
+            f"ORDER BY {order_by} LIMIT ? OFFSET ?",
+            [*params, normalized_limit, normalized_offset],
+        )
+        facets = await _notes_facets(
+            db,
+            q=q,
+            book_id=book_id,
+            tags=normalized_tags,
+            note_kind=note_kind,
+            color=color,
+            view=view,
+            use_fts=use_fts,
+        )
+
+    return {
+        "items": [_row_to_dict(row) for row in rows],
+        "total": total,
+        "limit": normalized_limit,
+        "offset": normalized_offset,
+        "has_more": normalized_offset + len(rows) < total,
+        "facets": facets,
+    }
+
+
+async def _notes_facets(
+    db: aiosqlite.Connection,
+    *,
+    q: str | None,
+    book_id: str | None,
+    tags: list[str],
+    note_kind: str,
+    color: str | None,
+    view: str,
+    use_fts: bool,
+) -> dict[str, list[dict[str, Any]]]:
+    book_where, book_params = _build_notes_where(
+        q=q,
+        book_id=book_id,
+        tags=tags,
+        note_kind=note_kind,
+        color=color,
+        view=view,
+        ignore_book_filter=True,
+        use_fts=use_fts,
+    )
+    books = await db.execute_fetchall(
+        f"""
+        SELECT highlights.book_id AS id, highlights.book_title AS title,
+               highlights.book_author AS author, COUNT(*) AS count
+        FROM highlights
+        WHERE {book_where}
+        GROUP BY highlights.book_id, highlights.book_title, highlights.book_author
+        ORDER BY highlights.book_title COLLATE NOCASE ASC, highlights.book_id ASC
+        """,
+        book_params,
+    )
+
+    tag_where, tag_params = _build_notes_where(
+        q=q,
+        book_id=book_id,
+        tags=tags,
+        note_kind=note_kind,
+        color=color,
+        view=view,
+        ignore_tag_filter=True,
+        use_fts=use_fts,
+    )
+    tag_rows = await db.execute_fetchall(
+        f"""
+        SELECT json_each.value AS name, COUNT(*) AS count
+        FROM highlights, json_each(highlights.tags)
+        WHERE {tag_where}
+        GROUP BY json_each.value
+        ORDER BY count DESC, name COLLATE NOCASE ASC
+        """,
+        tag_params,
+    )
+    return {
+        "books": [dict(row) for row in books],
+        "tags": [dict(row) for row in tag_rows],
+    }
+
+
+async def list_notes_for_export(
+    *,
+    q: str | None = None,
+    book_id: str | None = None,
+    tags: list[str] | None = None,
+    note_kind: str = "all",
+    color: str | None = None,
+) -> list[dict[str, Any]]:
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await _notes_rows(
+            db,
+            q=q,
+            book_id=book_id,
+            tags=tags or [],
+            note_kind=note_kind,
+            color=color,
+            view="active",
+            order_by=(
+                "highlights.book_title COLLATE NOCASE ASC, "
+                "highlights.progress_percent ASC, highlights.created_at ASC, "
+                "highlights.id ASC"
+            ),
+        )
+        return [_row_to_dict(row) for row in rows]
+
+
 async def get_all_highlights(
     book_title: Optional[str] = None, limit: int = 100, offset: int = 0
 ) -> list[dict]:
-    """Fetch highlights, optionally filtered by book title."""
+    """Fetch active highlights, optionally filtered by book title."""
     async with aiosqlite.connect(str(DB_PATH)) as db:
         db.row_factory = aiosqlite.Row
         if book_title:
             rows = await db.execute_fetchall(
-                "SELECT * FROM highlights WHERE book_title LIKE ? ORDER BY received_at DESC LIMIT ? OFFSET ?",
+                "SELECT * FROM highlights WHERE deleted_at IS NULL "
+                "AND book_title LIKE ? ORDER BY received_at DESC LIMIT ? OFFSET ?",
                 (f"%{book_title}%", limit, offset),
             )
         else:
             rows = await db.execute_fetchall(
-                "SELECT * FROM highlights ORDER BY received_at DESC LIMIT ? OFFSET ?",
+                "SELECT * FROM highlights WHERE deleted_at IS NULL "
+                "ORDER BY received_at DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             )
         return [_row_to_dict(r) for r in rows]
@@ -226,10 +625,10 @@ async def get_materials(
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict]:
-    """Fetch highlight materials for the creation workspace."""
+    """Fetch active highlight materials for the creation workspace."""
     async with aiosqlite.connect(str(DB_PATH)) as db:
         db.row_factory = aiosqlite.Row
-        conditions = []
+        conditions = ["deleted_at IS NULL"]
         params = []
         if book_title:
             conditions.append("book_title LIKE ?")
@@ -257,7 +656,7 @@ async def get_materials(
 
 
 async def get_highlights_by_ids(ids: list[str]) -> list[dict]:
-    """Fetch specific highlights by their IDs."""
+    """Fetch specific active highlights by their IDs."""
     if not ids:
         return []
 
@@ -265,7 +664,8 @@ async def get_highlights_by_ids(ids: list[str]) -> list[dict]:
     async with aiosqlite.connect(str(DB_PATH)) as db:
         db.row_factory = aiosqlite.Row
         rows = await db.execute_fetchall(
-            f"SELECT * FROM highlights WHERE id IN ({placeholders}) OR client_id IN ({placeholders})",
+            f"SELECT * FROM highlights WHERE deleted_at IS NULL AND "
+            f"(id IN ({placeholders}) OR client_id IN ({placeholders}))",
             [*ids, *ids],
         )
         return [_row_to_dict(r) for r in rows]
@@ -345,6 +745,316 @@ async def delete_highlight(identifier: str, legacy_match: Optional[dict] = None)
 
         await db.commit()
         return deleted > 0
+
+
+class NoteBatchConflict(Exception):
+    pass
+
+
+def _normalize_note_ids(ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(value.strip() for value in ids if value.strip()))
+
+
+def _batch_request_hash(operation_type: str, request: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        {"operation_type": operation_type, **request},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+async def _existing_batch_result(
+    db: aiosqlite.Connection,
+    *,
+    operation_id: str,
+    operation_type: str,
+    request_hash: str,
+) -> dict[str, Any] | None:
+    row = await db.execute_fetchall(
+        "SELECT operation_type, request_hash, result_json "
+        "FROM note_batch_operations WHERE operation_id = ?",
+        (operation_id,),
+    )
+    if not row:
+        return None
+    if row[0][0] != operation_type or row[0][1] != request_hash:
+        raise NoteBatchConflict("operation_id already belongs to a different request")
+    return json.loads(row[0][2])
+
+
+async def _save_batch_result(
+    db: aiosqlite.Connection,
+    *,
+    operation_id: str,
+    operation_type: str,
+    request_hash: str,
+    result: dict[str, Any],
+) -> None:
+    await db.execute(
+        """
+        INSERT INTO note_batch_operations (
+            operation_id, operation_type, request_hash, result_json, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            operation_id,
+            operation_type,
+            request_hash,
+            json.dumps(result, ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+
+
+def _batch_item(row: aiosqlite.Row, *, tags: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "client_id": row["client_id"] or "",
+        "book_id": row["book_id"],
+        "tags": _row_json_list(row["tags"]) if tags is None else tags,
+        "deleted_at": row["deleted_at"],
+    }
+
+
+async def _load_batch_rows(
+    db: aiosqlite.Connection, ids: list[str]
+) -> dict[str, aiosqlite.Row]:
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = await db.execute_fetchall(
+        f"SELECT * FROM highlights WHERE id IN ({placeholders})",
+        ids,
+    )
+    return {row["id"]: row for row in rows}
+
+
+async def batch_update_note_tags(
+    *, operation_id: str, ids: list[str], action: str, tags: list[str]
+) -> dict[str, Any]:
+    normalized_ids = _normalize_note_ids(ids)
+    normalized_tags = normalize_note_tags(tags)
+    request = {
+        "ids": normalized_ids,
+        "action": action,
+        "tags": normalized_tags,
+    }
+    operation_type = "tags"
+    request_hash = _batch_request_hash(operation_type, request)
+
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            replay = await _existing_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                await db.commit()
+                return replay
+
+            rows = await _load_batch_rows(db, normalized_ids)
+            invalid_ids = [
+                note_id
+                for note_id in normalized_ids
+                if note_id not in rows or rows[note_id]["deleted_at"] is not None
+            ]
+            if invalid_ids:
+                raise NoteBatchConflict(
+                    "tags require active notes: " + ", ".join(invalid_ids)
+                )
+
+            items = []
+            unchanged = 0
+            now = datetime.now(timezone.utc).isoformat()
+            for note_id in normalized_ids:
+                row = rows[note_id]
+                existing_tags = normalize_note_tags(_row_json_list(row["tags"]))
+                if action == "add":
+                    updated_tags = normalize_note_tags([*existing_tags, *normalized_tags])
+                elif action == "remove":
+                    removed = set(normalized_tags)
+                    updated_tags = [tag for tag in existing_tags if tag not in removed]
+                else:
+                    raise NoteBatchConflict("unsupported tag action")
+
+                if updated_tags == existing_tags:
+                    unchanged += 1
+                    continue
+                await db.execute(
+                    "UPDATE highlights SET tags = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(updated_tags, ensure_ascii=False), now, note_id),
+                )
+                items.append(_batch_item(row, tags=updated_tags))
+
+            result = {
+                "operation_id": operation_id,
+                "affected": len(items),
+                "unchanged": unchanged,
+                "items": items,
+            }
+            await _save_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+                result=result,
+            )
+            await db.commit()
+            return result
+        except BaseException:
+            await db.rollback()
+            raise
+
+
+async def _batch_set_deleted_at(
+    *, operation_id: str, ids: list[str], restore: bool
+) -> dict[str, Any]:
+    normalized_ids = _normalize_note_ids(ids)
+    operation_type = "restore" if restore else "trash"
+    request_hash = _batch_request_hash(operation_type, {"ids": normalized_ids})
+
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            replay = await _existing_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                await db.commit()
+                return replay
+
+            rows = await _load_batch_rows(db, normalized_ids)
+            timestamp = None if restore else datetime.now(timezone.utc).isoformat()
+            items = []
+            unchanged = 0
+            for note_id in normalized_ids:
+                row = rows.get(note_id)
+                should_change = row is not None and (
+                    row["deleted_at"] is not None if restore else row["deleted_at"] is None
+                )
+                if not should_change:
+                    unchanged += 1
+                    continue
+                await db.execute(
+                    "UPDATE highlights SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                    (timestamp, datetime.now(timezone.utc).isoformat(), note_id),
+                )
+                item = _batch_item(row)
+                item["deleted_at"] = timestamp
+                items.append(item)
+
+            result = {
+                "operation_id": operation_id,
+                "affected": len(items),
+                "unchanged": unchanged,
+                "items": items,
+            }
+            await _save_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+                result=result,
+            )
+            await db.commit()
+            return result
+        except BaseException:
+            await db.rollback()
+            raise
+
+
+async def batch_trash_notes(
+    *, operation_id: str, ids: list[str]
+) -> dict[str, Any]:
+    return await _batch_set_deleted_at(
+        operation_id=operation_id,
+        ids=ids,
+        restore=False,
+    )
+
+
+async def batch_restore_notes(
+    *, operation_id: str, ids: list[str]
+) -> dict[str, Any]:
+    return await _batch_set_deleted_at(
+        operation_id=operation_id,
+        ids=ids,
+        restore=True,
+    )
+
+
+async def batch_delete_notes(
+    *, operation_id: str, ids: list[str]
+) -> dict[str, Any]:
+    normalized_ids = _normalize_note_ids(ids)
+    operation_type = "delete"
+    request_hash = _batch_request_hash(operation_type, {"ids": normalized_ids})
+
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            replay = await _existing_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+            )
+            if replay is not None:
+                await db.commit()
+                return replay
+
+            rows = await _load_batch_rows(db, normalized_ids)
+            active_ids = [
+                note_id
+                for note_id in normalized_ids
+                if note_id in rows and rows[note_id]["deleted_at"] is None
+            ]
+            if active_ids:
+                raise NoteBatchConflict(
+                    "delete requires trashed notes: " + ", ".join(active_ids)
+                )
+
+            items = [
+                _batch_item(rows[note_id])
+                for note_id in normalized_ids
+                if note_id in rows
+            ]
+            if items:
+                placeholders = ",".join("?" for _ in items)
+                await db.execute(
+                    f"DELETE FROM highlights WHERE id IN ({placeholders})",
+                    [item["id"] for item in items],
+                )
+
+            result = {
+                "operation_id": operation_id,
+                "affected": len(items),
+                "unchanged": len(normalized_ids) - len(items),
+                "items": items,
+            }
+            await _save_batch_result(
+                db,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                request_hash=request_hash,
+                result=result,
+            )
+            await db.commit()
+            return result
+        except BaseException:
+            await db.rollback()
+            raise
 
 
 def _row_to_dict(row: aiosqlite.Row) -> dict:
@@ -517,6 +1227,7 @@ async def export_all_to_json() -> Path:
             "updated_at": h.get("updated_at", ""),
             "status": h.get("status", "raw"),
         })
+    NOTES_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
     NOTES_JSON_PATH.write_text(
         json.dumps(entries, ensure_ascii=False, indent=2),
         encoding="utf-8",

@@ -95,7 +95,7 @@ test.describe('EPUB import feedback', () => {
     await expect(page.locator('#operation-status')).toBeVisible();
     await expect(page.locator('#toolbar-book-title')).toContainText('Multichapter', { timeout: 10_000 });
     await expect(page.locator('#reader-loading')).toBeHidden();
-    expect(uploadStarted).toBe(true);
+    await expect.poll(() => uploadStarted).toBe(true);
 
     releaseUpload();
     await expect(page.locator('#operation-status-message')).toContainText(/已保存到服务器|已全部就绪/);
@@ -140,12 +140,12 @@ test.describe('EPUB import feedback', () => {
 
     await page.goto('/index.html');
     await expect(page.locator('.book-card')).toHaveCount(1);
-    await page.click('.book-card');
+    await page.getByRole('button', { name: /打开《Multichapter/ }).click();
     await expect(page.locator('#toolbar-book-title')).toContainText('Multichapter', { timeout: 10_000 });
 
     await page.click('#btn-back');
     await expect(page.locator('#library-view')).toHaveClass(/active/);
-    await page.click('.book-card');
+    await page.getByRole('button', { name: /打开《Multichapter/ }).click();
     await expect(page.locator('#reader-loading')).toBeVisible();
 
     releaseSecondDownload();

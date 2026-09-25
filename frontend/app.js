@@ -1,5 +1,5 @@
 /**
- * Marginalia — Core Application Logic
+ * E-BookTrace — Core Application Logic
  * Handles: IndexedDB, epub.js reader, highlights, notes, sync, PWA
  */
 (function () {
@@ -7,7 +7,7 @@
 
   // ==================== CONSTANTS ====================
   const DB_NAME = 'marginalia';
-  const DB_VERSION = 5;
+  const DB_VERSION = 6;
   const API_BASE = '';  // same origin — works locally and remotely
   const API_TIMEOUT_MS = 5000;
   const READER_SYNC_TIMEOUT_MS = 3000;
@@ -37,10 +37,8 @@
   let currentBookUrl = null;    // blob URL for current EPUB (for cleanup)
   let currentChapter = '';
   let currentCfi = '';
+  let currentChapterId = '';
   let pendingSelection = null;  // { cfiRange, text } from last selection
-  let selectedMaterialId = null;
-  let selectedMaterialIds = new Set();
-  let currentDraftId = null;
   let locationsReadyPromise = null;
   let locationsReadyBook = null;
   let lastPageInfo = null;
@@ -61,12 +59,28 @@
   const FONT_SIZE_STEP = 5;   // percent per scroll
   const FONT_SIZE_MIN = 60;
   const FONT_SIZE_MAX = 200;
+  const READER_TYPOGRAPHY_KEY = 'marginalia.readerTypography';
+  const READER_FONT_FAMILIES = new Set(['original', 'serif', 'sans', 'kai']);
+  const READER_FONT_STACKS = {
+    serif: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, Georgia, serif',
+    sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    kai: '"Kaiti SC", STKaiti, KaiTi, "楷体", serif',
+  };
+  const READER_LINE_HEIGHT_DEFAULT = 1.7;
+  const READER_LINE_HEIGHT_MIN = 1.2;
+  const READER_LINE_HEIGHT_MAX = 2.4;
+  const READER_PARAGRAPH_SPACING_DEFAULT = 0.5;
+  const READER_PARAGRAPH_SPACING_MIN = 0;
+  const READER_PARAGRAPH_SPACING_MAX = 2;
+  const READER_SPACING_STEP = 0.1;
+  const FONT_ZOOM_DELTA_THRESHOLD = 10;
+  let currentReaderFontFamily = 'original';
+  let currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+  let currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
+  let fontZoomAccumulatedDelta = 0;
+  let fontZoomResetTimer = null;
   let searchResultsList = [];
   let searchHighlightKeys = [];
-  let aiMessages = [];
-  let aiConversations = [];
-  let currentAiConversationId = null;
-  let aiRequestInFlight = false;
   let aiIndexPollTimer = null;
   let pendingBookDelete = null;
   let lastDialogTrigger = null;
@@ -80,8 +94,30 @@
   let readerChromeVisible = true;
   let readerChromeAutoHideEnabled = true;
   let readerChromeHideTimer = null;
-  let readerChromeLayoutTimer = null;
+  let readerChromeHoverCloseTimer = null;
+  let readerNavigatorHoverCloseTimer = null;
+  let readerNotesHoverCloseTimer = null;
   let readerIframeObserver = null;
+  let currentRoute = null;
+  let routeTransition = Promise.resolve();
+  let pendingRoute = null;
+  let pendingRouteTransition = null;
+  let notesQuery = createDefaultNotesQuery();
+  let notesItems = [];
+  let notesTotal = 0;
+  let notesHasMore = false;
+  let notesLoaded = false;
+  let notesLoadError = null;
+  let notesSearchTimer = null;
+  let notesLoadGeneration = 0;
+  let notesFacets = null;
+  const notesSelection = new Set();
+  let managedNoteDraft = null;
+  let managedNoteOriginal = null;
+  let managedNoteUndo = null;
+  let managedNoteUndoTimer = null;
+  let lastTrashedNotes = [];
+  let managedNoteTrigger = null;
 
   // ==================== DOM REFS ====================
   const $ = (sel) => document.querySelector(sel);
@@ -89,11 +125,9 @@
 
   const dom = {
     app: $('#app'),
-    appNav: $('.app-nav'),
     libraryView: $('#library-view'),
     readerView: $('#reader-view'),
     readerToolbar: $('.reader-toolbar'),
-    readerFooter: $('.reader-footer'),
     readerMain: $('.reader-main'),
     bookList: $('#book-list'),
     emptyLibrary: $('#empty-library'),
@@ -106,38 +140,43 @@
     btnOperationRetry: $('#btn-operation-retry'),
     btnOperationClose: $('#btn-operation-close'),
     epubContainer: $('#epub-container'),
+    readerNavigator: $('#reader-navigator'),
+    tocList: $('#toc-list'),
+    btnToggleNavigator: $('#btn-toggle-navigator'),
+    btnCloseNavigator: $('#btn-close-navigator'),
+    btnRevealNavigator: $('#btn-reveal-navigator'),
     notesPanel: $('#notes-panel'),
     btnCloseNotesPanel: $('#btn-close-notes-panel'),
+    btnRevealNotes: $('#btn-reveal-notes'),
     readerPanelBackdrop: $('#reader-panel-backdrop'),
     bookmarksList: $('#bookmarks-list'),
     bookmarksCount: $('#bookmarks-count'),
-    notesList: $('#notes-list'),
+    readerNotesList: $('#notes-list'),
     notesCount: $('#notes-count'),
     toolbarBookTitle: $('#toolbar-book-title'),
     toolbarChapter: $('#toolbar-chapter'),
-    progressSlider: $('#progress-slider'),
     progressText: $('#progress-text'),
     pageText: $('#page-text'),
     btnBack: $('#btn-back'),
-    btnToggleAi: $('#btn-toggle-ai'),
     btnReaderTools: $('#btn-reader-tools'),
     btnRevealReaderChrome: $('#btn-reveal-reader-chrome'),
     readerToolPanel: $('#reader-tool-panel'),
-    btnCloseAi: $('#btn-close-ai'),
-    aiPanel: $('#ai-panel'),
-    aiMessages: $('#ai-messages'),
-    aiForm: $('#ai-form'),
-    aiQuestionInput: $('#ai-question-input'),
-    btnSendAi: $('#btn-send-ai'),
-    aiIndexStatus: $('#ai-index-status'),
-    aiConversationSelect: $('#ai-conversation-select'),
-    btnNewAiConversation: $('#btn-new-ai-conversation'),
-    btnDeleteAiConversation: $('#btn-delete-ai-conversation'),
-    btnRetryAiIndex: $('#btn-retry-ai-index'),
     btnAddBookmark: $('#btn-add-bookmark'),
     btnToggleNotes: $('#btn-toggle-notes'),
     btnToggleSearch: $('#btn-toggle-search'),
     btnToggleReaderAutoHide: $('#btn-toggle-reader-auto-hide'),
+    readerFontFamily: $('#reader-font-family'),
+    readerFontSize: $('#reader-font-size'),
+    readerFontSizeValue: $('#reader-font-size-value'),
+    btnReaderFontDecrease: $('#btn-reader-font-decrease'),
+    btnReaderFontReset: $('#btn-reader-font-reset'),
+    btnReaderFontIncrease: $('#btn-reader-font-increase'),
+    readerLineHeight: $('#reader-line-height'),
+    readerLineHeightValue: $('#reader-line-height-value'),
+    btnReaderLineHeightReset: $('#btn-reader-line-height-reset'),
+    readerParagraphSpacing: $('#reader-paragraph-spacing'),
+    readerParagraphSpacingValue: $('#reader-paragraph-spacing-value'),
+    btnReaderParagraphSpacingReset: $('#btn-reader-paragraph-spacing-reset'),
     toolbarSearch: $('#toolbar-search'),
     searchInput: $('#search-input'),
     btnSearch: $('#btn-search'),
@@ -157,39 +196,46 @@
     btnDeleteNote: $('#btn-delete-note'),
     btnCloseModal: $('#btn-close-modal'),
     toast: $('#toast'),
-    btnNavPrev: $('#btn-nav-prev'),
-    btnNavNext: $('#btn-nav-next'),
     readerLoading: $('#reader-loading'),
     readerLoadingMessage: $('#reader-loading-message'),
     readerLoadingDetail: $('#reader-loading-detail'),
     readerLoadingProgress: $('#reader-loading-progress'),
     readerLoadingProgressBar: $('#reader-loading-progress-bar'),
     readerLoadingProgressText: $('#reader-loading-progress-text'),
-    btnNavLibrary: $('#btn-nav-library'),
-    btnNavRead: $('#btn-nav-read'),
-    btnNavCreate: $('#btn-nav-create'),
     btnLibraryCreate: $('#btn-library-create'),
     creationView: $('#creation-view'),
-    btnRefreshMaterials: $('#btn-refresh-materials'),
-    btnExportBook: $('#btn-export-book'),
-    materialBookFilter: $('#material-book-filter'),
-    materialTagFilter: $('#material-tag-filter'),
-    materialsList: $('#materials-list'),
-    selectedMaterialCount: $('#selected-material-count'),
-    selectedMaterialDetail: $('#selected-material-detail'),
-    reflectionEditor: $('#reflection-editor'),
-    btnSaveReflection: $('#btn-save-reflection'),
-    btnDeleteReflection: $('#btn-delete-reflection'),
-    draftTopic: $('#draft-topic'),
-    draftInstruction: $('#draft-instruction'),
-    btnGenerateVideo: $('#btn-generate-video'),
-    btnGenerateArticle: $('#btn-generate-article'),
-    draftList: $('#draft-list'),
-    draftEditor: $('#draft-editor'),
-    draftTitleEditor: $('#draft-title-editor'),
-    draftContentEditor: $('#draft-content-editor'),
-    btnSaveDraft: $('#btn-save-draft'),
-    btnExportDraft: $('#btn-export-draft'),
+    btnNotesBack: $('#btn-notes-back'),
+    notesSearch: $('#notes-search'),
+    notesBookFilter: $('#notes-book-filter'),
+    notesTagFilter: $('#notes-tag-filter'),
+    notesKindFilter: $('#notes-kind-filter'),
+    notesColorFilter: $('#notes-color-filter'),
+    notesSort: $('#notes-sort'),
+    notesPendingOnly: $('#notes-pending-only'),
+    notesDataStatus: $('#notes-data-status'),
+    notesManagementList: $('#notes-management-list'),
+    notesPrevious: $('#btn-notes-previous'),
+    notesNext: $('#btn-notes-next'),
+    notesPageStatus: $('#notes-page-status'),
+    notesLiveStatus: $('#notes-live-status'),
+    notesDetailPane: $('#notes-detail-pane'),
+    notesUnsavedDialog: $('#notes-unsaved-dialog'),
+    notesCountConfirmDialog: $('#notes-count-confirm-dialog'),
+    notesCountConfirmMessage: $('#notes-count-confirm-message'),
+    notesBatchTagField: $('#notes-batch-tag-field'),
+    notesBatchTags: $('#notes-batch-tags'),
+    notesSelectPage: $('#notes-select-page'),
+    notesSelectionCount: $('#notes-selection-count'),
+    btnBatchAddTag: $('#btn-batch-add-tag'),
+    btnBatchRemoveTag: $('#btn-batch-remove-tag'),
+    btnBatchTrash: $('#btn-batch-trash'),
+    notesTrashActions: $('#notes-trash-actions'),
+    btnBatchRestore: $('#btn-batch-restore'),
+    btnBatchDelete: $('#btn-batch-delete'),
+    btnEmptyTrash: $('#btn-empty-trash'),
+    btnNotesTrash: $('#btn-toggle-notes-trash'),
+    btnExportNotesMarkdown: $('#btn-export-notes-markdown'),
+    btnClearNoteFilters: $('#btn-clear-note-filters'),
     bookDeleteModal: $('#book-delete-modal'),
     bookDeleteMessage: $('#book-delete-message'),
     btnCancelBookDelete: $('#btn-cancel-book-delete'),
@@ -204,30 +250,39 @@
       req.onupgradeneeded = (e) => {
         const d = e.target.result;
 
-        // Books store
-        if (!d.objectStoreNames.contains('books')) {
-          const booksStore = d.createObjectStore('books', { keyPath: 'id' });
+        const transaction = e.target.transaction;
+        const booksStore = d.objectStoreNames.contains('books')
+          ? transaction.objectStore('books')
+          : d.createObjectStore('books', { keyPath: 'id' });
+        if (!booksStore.indexNames.contains('by_title')) {
           booksStore.createIndex('by_title', 'book_title', { unique: false });
         }
 
-        // Highlights store
-        if (!d.objectStoreNames.contains('highlights')) {
-          const hStore = d.createObjectStore('highlights', { keyPath: 'id' });
-          hStore.createIndex('by_book', 'book_id', { unique: false });
-          hStore.createIndex('by_synced', 'synced', { unique: false });
+        const highlightsStore = d.objectStoreNames.contains('highlights')
+          ? transaction.objectStore('highlights')
+          : d.createObjectStore('highlights', { keyPath: 'id' });
+        if (!highlightsStore.indexNames.contains('by_book')) {
+          highlightsStore.createIndex('by_book', 'book_id', { unique: false });
+        }
+        if (!highlightsStore.indexNames.contains('by_synced')) {
+          highlightsStore.createIndex('by_synced', 'synced', { unique: false });
         }
 
         if (!d.objectStoreNames.contains('deleted_highlights')) {
           d.createObjectStore('deleted_highlights', { keyPath: 'id' });
         }
 
-        if (!d.objectStoreNames.contains('bookmarks')) {
-          const bStore = d.createObjectStore('bookmarks', { keyPath: 'id' });
-          bStore.createIndex('by_book', 'book_id', { unique: false });
+        const bookmarksStore = d.objectStoreNames.contains('bookmarks')
+          ? transaction.objectStore('bookmarks')
+          : d.createObjectStore('bookmarks', { keyPath: 'id' });
+        if (!bookmarksStore.indexNames.contains('by_book')) {
+          bookmarksStore.createIndex('by_book', 'book_id', { unique: false });
         }
 
-        if (!d.objectStoreNames.contains('sync_queue')) {
-          const syncStore = d.createObjectStore('sync_queue', { keyPath: 'id' });
+        const syncStore = d.objectStoreNames.contains('sync_queue')
+          ? transaction.objectStore('sync_queue')
+          : d.createObjectStore('sync_queue', { keyPath: 'id' });
+        if (!syncStore.indexNames.contains('by_book')) {
           syncStore.createIndex('by_book', 'book_id', { unique: false });
         }
       };
@@ -290,10 +345,14 @@
   }
 
   function dbDelete(storeName, id) {
+    return dbDeleteMany(storeName, [id]);
+  }
+
+  function dbDeleteMany(storeName, ids) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
-      store.delete(id);
+      ids.forEach(id => store.delete(id));
       tx.oncomplete = () => resolve();
       tx.onerror = (e) => reject(e.target.error);
     });
@@ -409,7 +468,10 @@
     const retry = card.querySelector('.book-transfer-retry');
     if (label) label.textContent = formatTransferStatus(book);
     if (row) row.dataset.state = status;
-    if (progress) progress.hidden = status !== 'uploading';
+    if (progress) {
+      progress.hidden = status !== 'uploading';
+      progress.setAttribute('aria-valuenow', String(Math.round(Math.max(0, Math.min(100, book.transfer_progress || 0)))));
+    }
     if (progressBar) progressBar.style.width = Math.max(0, Math.min(100, book.transfer_progress || 0)) + '%';
     if (retry) retry.hidden = status !== 'failed' && status !== 'local_only';
   }
@@ -488,10 +550,105 @@
   }
 
   async function showLibrary() {
-    // Flush progress to IndexedDB before clearing state
-    await saveCurrentProgress();
+    await navigateToRoute('/');
+  }
 
-    // Destroy epub.js resources BEFORE nulling references
+  async function showCreation() {
+    await navigateToRoute('/creation');
+  }
+
+  function getRouteFromHash() {
+    const route = window.location.hash.replace(/^#/, '') || '/';
+    return ['/', '/reader', '/creation'].includes(route) ? route : '/';
+  }
+
+  async function navigateToRoute(route, { replace = false } = {}) {
+    const hash = `#${route}`;
+    if (replace) {
+      history.replaceState({}, '', hash);
+    } else if (window.location.hash !== hash) {
+      history.pushState({}, '', hash);
+    }
+    await applyCurrentRoute();
+  }
+
+  function applyCurrentRoute() {
+    const route = getRouteFromHash();
+    if (route === pendingRoute && pendingRouteTransition) {
+      return pendingRouteTransition;
+    }
+
+    pendingRoute = route;
+    const transition = routeTransition.then(() => transitionToRoute(route));
+    pendingRouteTransition = transition;
+    routeTransition = transition.catch(() => {}).finally(() => {
+      if (pendingRouteTransition !== transition) return;
+      pendingRoute = null;
+      pendingRouteTransition = null;
+    });
+    return transition;
+  }
+
+  async function transitionToRoute(route) {
+    const requestedRoute = route;
+    if (route === '/reader' && !currentBookMeta) {
+      route = '/';
+    }
+    if (route === currentRoute) {
+      if (requestedRoute !== route) history.replaceState({}, '', '#/');
+      return;
+    }
+
+    const previousRoute = currentRoute;
+    try {
+      if (previousRoute === '/reader' && route !== '/reader') {
+        await leaveReader();
+      }
+      renderRoute(route);
+      if (route === '/') {
+        await renderLibrary();
+      }
+      if (route === '/creation') {
+        await loadNotesManagement();
+      }
+      if (requestedRoute !== route) history.replaceState({}, '', '#/');
+      currentRoute = route;
+    } catch (err) {
+      const previousHash = `#${previousRoute || '/'}`;
+      history.replaceState({}, '', previousHash);
+      renderRoute(previousRoute || '/');
+      console.error('Route transition failed:', err);
+      showToast('页面切换失败，请重试', 'error');
+      throw err;
+    }
+  }
+
+  function renderRoute(route) {
+    dom.libraryView.classList.toggle('active', route === '/');
+    dom.readerView.classList.toggle('active', route === '/reader');
+    dom.creationView.classList.toggle('active', route === '/creation');
+    // v2's reader theme layer scopes some rules behind body.reader-active.
+    document.body.classList.toggle('reader-active', route === '/reader');
+    if (route === '/reader') {
+      setReaderChromeVisible(true);
+      syncReaderToolStates();
+      syncReaderPanelBackdrop();
+      if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
+      return;
+    }
+
+    resetReaderChrome();
+    closeMobileReaderPanels();
+    syncReaderPanelBackdrop();
+    if (route === '/') {
+      setReaderToolsOpen(false);
+      hideReaderLoading();
+      hideSelectionToolbar();
+    }
+  }
+
+  async function leaveReader() {
+    await saveCurrentProgress();
     if (currentRendition) {
       try { currentRendition.destroy(); } catch (_e) { /* already destroyed */ }
       currentRendition = null;
@@ -500,69 +657,23 @@
       try { currentBook.destroy(); } catch (_e) { /* already destroyed */ }
       currentBook = null;
     }
-
-    // Clear epub.js resources without deleting the persistent loading overlay.
     Array.from(dom.epubContainer.children).forEach((child) => {
       if (child !== dom.readerLoading) child.remove();
     });
     dom.epubContainer.style.display = '';
-
-    // Reset all reader state
     currentCfi = '';
     currentChapter = '';
+    currentChapterId = '';
     pendingSelection = null;
-    selectedMaterialId = null;
-    selectedMaterialIds.clear();
-    currentDraftId = null;
     progressJumpToken = 0;
     _boundIframeDocuments = new WeakSet();
     locationsReadyPromise = null;
     locationsReadyBook = null;
-
-    dom.libraryView.classList.add('active');
-    dom.readerView.classList.remove('active');
-    dom.creationView.classList.remove('active');
-    resetReaderChrome();
-    closeMobileReaderPanels();
-    syncReaderPanelBackdrop();
-    setActiveNav('library');
-    setReaderToolsOpen(false);
-    hideReaderLoading();
-    hideSelectionToolbar();
     if (currentBookUrl) {
       URL.revokeObjectURL(currentBookUrl);
       currentBookUrl = null;
     }
     currentBookMeta = null;
-    renderLibrary();
-  }
-
-  function showReader() {
-    dom.libraryView.classList.remove('active');
-    dom.readerView.classList.add('active');
-    dom.creationView.classList.remove('active');
-    setReaderChromeVisible(true);
-    setActiveNav('read');
-    syncReaderToolStates();
-    syncReaderPanelBackdrop();
-    if (currentRendition) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
-  }
-
-  async function showCreation() {
-    dom.libraryView.classList.remove('active');
-    dom.readerView.classList.remove('active');
-    dom.creationView.classList.add('active');
-    resetReaderChrome();
-    closeMobileReaderPanels();
-    syncReaderPanelBackdrop();
-    setActiveNav('create');
-    await renderCreationWorkspace();
-  }
-
-  function setActiveNav(target) {
-    dom.btnNavLibrary.classList.toggle('active', target === 'library');
-    dom.btnNavRead.classList.toggle('active', target === 'read');
-    dom.btnNavCreate.classList.toggle('active', target === 'create');
   }
 
   function safeFocus(el) {
@@ -597,7 +708,7 @@
 
   function hasOpenReaderSurface() {
     return !dom.readerToolPanel.hidden ||
-      !dom.aiPanel.classList.contains('collapsed') ||
+      !dom.readerNavigator.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden ||
       !dom.noteModal.hidden ||
@@ -623,16 +734,6 @@
     }
   }
 
-  function refreshLayoutAfterChromeChange() {
-    refreshReaderLayout();
-    if (readerChromeLayoutTimer) clearTimeout(readerChromeLayoutTimer);
-    readerChromeLayoutTimer = setTimeout(() => {
-      readerChromeLayoutTimer = null;
-      refreshReaderLayout();
-      setupIframeNavigation();
-    }, 280);
-  }
-
   function setReaderChromeVisible(visible, { autoHide = false, force = false } = {}) {
     const readerIsActive = dom.readerView.classList.contains('active');
     const shouldShow = !readerIsActive ? true : Boolean(visible);
@@ -643,20 +744,18 @@
       setReaderToolsOpen(false, { skipChromeSchedule: true });
     }
 
-    const changed = readerChromeVisible !== shouldShow ||
-      dom.readerView.classList.contains('reader-chrome-hidden') === shouldShow;
     readerChromeVisible = shouldShow;
     dom.readerView.classList.toggle('reader-chrome-hidden', !shouldShow);
     document.body.classList.toggle('reader-chrome-hidden', !shouldShow && readerIsActive);
     setChromeElementHidden(dom.readerToolbar, !shouldShow);
-    setChromeElementHidden(dom.readerFooter, !shouldShow);
-    setChromeElementHidden(dom.appNav, !shouldShow && readerIsActive);
 
-    if (changed) refreshLayoutAfterChromeChange();
     if (shouldShow && autoHide) scheduleReaderChromeHide();
     return true;
   }
 
+  // NOTE: 本线刻意不带 v2 的 `if (!isMobileLayout()) return;` 守卫。
+  // 桌面端进入阅读器后的初始收起（openBook → renderRoute → scheduleReaderChromeHide(2400ms)）
+  // 依赖此函数在桌面也生效；新增调用者若只想在移动端安排收起，需自行加守卫。
   function scheduleReaderChromeHide(delay = READER_CHROME_AUTO_HIDE_MS) {
     cancelReaderChromeHide();
     if (!canAutoHideReaderChrome()) return;
@@ -667,15 +766,43 @@
   }
 
   function revealReaderChromeTemporarily() {
+    cancelReaderChromeHoverClose();
     setReaderChromeVisible(true);
-    scheduleReaderChromeHide();
+    if (isMobileLayout()) scheduleReaderChromeHide();
+  }
+
+  function cancelReaderChromeHoverClose() {
+    if (!readerChromeHoverCloseTimer) return;
+    clearTimeout(readerChromeHoverCloseTimer);
+    readerChromeHoverCloseTimer = null;
+  }
+
+  function openReaderChromeOnHover() {
+    if (isMobileLayout()) return;
+    cancelReaderChromeHoverClose();
+    setReaderChromeVisible(true);
+  }
+
+  function scheduleReaderChromeHoverClose() {
+    if (isMobileLayout()) return;
+    cancelReaderChromeHoverClose();
+    readerChromeHoverCloseTimer = setTimeout(() => {
+      readerChromeHoverCloseTimer = null;
+      setReaderChromeVisible(false);
+    }, 160);
   }
 
   function toggleReaderChromeFromContent() {
     if (!readerChromeAutoHideEnabled) return;
     if (!dom.readerView.classList.contains('active') || hasOpenReaderSurface()) return;
     if (pendingSelection || !dom.selectionToolbar.hidden) return;
-    setReaderChromeVisible(!readerChromeVisible, { autoHide: !readerChromeVisible });
+    if (readerChromeVisible) {
+      if (isMobileLayout()) scheduleReaderChromeHide();
+      else setReaderChromeVisible(false);
+    } else {
+      cancelReaderChromeHide();
+      setReaderChromeVisible(true);
+    }
   }
 
   function updateReaderChromeAutoHideUI() {
@@ -718,24 +845,23 @@
 
   function resetReaderChrome() {
     cancelReaderChromeHide();
-    if (readerChromeLayoutTimer) {
-      clearTimeout(readerChromeLayoutTimer);
-      readerChromeLayoutTimer = null;
-    }
-    readerChromeVisible = true;
-    dom.readerView.classList.remove('reader-chrome-hidden');
-    document.body.classList.remove('reader-chrome-hidden');
-    setChromeElementHidden(dom.readerToolbar, false);
-    setChromeElementHidden(dom.readerFooter, false);
-    setChromeElementHidden(dom.appNav, false);
+    cancelReaderChromeHoverClose();
+    cancelReaderNavigatorHoverClose();
+    cancelReaderNotesHoverClose();
+    setReaderChromeVisible(true);
+    setReaderNavigatorOpen(false);
+    toggleNotesPanel(false);
+    syncReaderPanelBackdrop();
+    refreshReaderLayout();
+    if (dom.readerView.classList.contains('active') && isMobileLayout()) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
   }
 
   function syncReaderToolStates() {
     if (dom.btnReaderTools) {
       dom.btnReaderTools.setAttribute('aria-expanded', String(!dom.readerToolPanel.hidden));
     }
-    if (dom.btnToggleAi) {
-      dom.btnToggleAi.setAttribute('aria-expanded', String(!dom.aiPanel.classList.contains('collapsed')));
+    if (dom.btnToggleNavigator) {
+      dom.btnToggleNavigator.setAttribute('aria-expanded', String(!dom.readerNavigator.classList.contains('collapsed')));
     }
     if (dom.btnToggleNotes) {
       dom.btnToggleNotes.setAttribute('aria-expanded', String(!dom.notesPanel.classList.contains('collapsed')));
@@ -747,7 +873,7 @@
 
   function syncReaderPanelBackdrop() {
     const hasOpenPanel = isMobileLayout() && dom.readerView.classList.contains('active') && (
-      !dom.aiPanel.classList.contains('collapsed') ||
+      !dom.readerNavigator.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden
     );
@@ -757,14 +883,17 @@
 
   function closeOtherMobileReaderPanels(except) {
     if (!isMobileLayout()) return;
-    if (except !== 'ai') {
-      dom.aiPanel.classList.add('collapsed');
-      dom.readerMain.classList.add('ai-collapsed');
+    if (except !== 'navigator') {
+      dom.readerNavigator.classList.remove('open');
+      dom.readerNavigator.classList.add('collapsed');
+      dom.readerNavigator.setAttribute('aria-hidden', 'true');
+      dom.readerView.classList.remove('navigator-open');
     }
     if (except !== 'notes') {
       dom.notesPanel.classList.remove('open');
       dom.notesPanel.classList.add('collapsed');
       dom.readerMain.classList.add('notes-collapsed');
+      dom.readerView.classList.remove('notes-open');
     }
     if (except !== 'search') {
       dom.searchPanel.hidden = true;
@@ -775,7 +904,8 @@
 
   function closeMobileReaderPanels({ restoreFocus = false } = {}) {
     if (!isMobileLayout()) return false;
-    const hadOpenPanel = !dom.aiPanel.classList.contains('collapsed') ||
+    const hadOpenPanel =
+      !dom.readerNavigator.classList.contains('collapsed') ||
       !dom.notesPanel.classList.contains('collapsed') ||
       !dom.searchPanel.hidden;
     closeOtherMobileReaderPanels('');
@@ -806,7 +936,177 @@
     setReaderToolsOpen(dom.readerToolPanel.hidden);
   }
 
+  // ==================== READER NAVIGATOR ====================
+
+  function normalizeReaderHref(value) {
+    const href = String(value || '').split('#', 1)[0].replace(/^\.\//, '');
+    try {
+      return decodeURIComponent(href);
+    } catch (_err) {
+      return href;
+    }
+  }
+
+  function renderTableOfContents(items) {
+    if (!dom.tocList) return;
+    const toc = Array.isArray(items) ? items : [];
+    dom.tocList.innerHTML = '';
+    if (!toc.length) {
+      dom.tocList.innerHTML = '<div class="empty-toc">本书没有可用目录</div>';
+      return;
+    }
+
+    const appendItems = (entries, depth = 0) => {
+      for (const item of entries) {
+        const href = String(item.href || '');
+        const label = String(item.label || item.title || '未命名章节').trim();
+        if (href) {
+          const button = document.createElement('button');
+          button.className = 'toc-item';
+          button.type = 'button';
+          button.dataset.href = normalizeReaderHref(href);
+          button.style.setProperty('--toc-depth', String(Math.min(depth, 5)));
+          button.textContent = label;
+          button.title = label;
+          button.addEventListener('click', () => gotoTocItem(item));
+          dom.tocList.appendChild(button);
+        }
+        const children = item.subitems || item.children || [];
+        if (Array.isArray(children) && children.length) appendItems(children, depth + 1);
+      }
+    };
+    appendItems(toc);
+  }
+
+  function updateTocActiveState(href) {
+    if (!dom.tocList) return;
+    const currentHref = normalizeReaderHref(href);
+    let activeButton = null;
+    for (const button of dom.tocList.querySelectorAll('.toc-item')) {
+      const itemHref = normalizeReaderHref(button.dataset.href);
+      const active = Boolean(currentHref && itemHref && (
+        currentHref === itemHref || currentHref.endsWith('/' + itemHref) || itemHref.endsWith('/' + currentHref)
+      ));
+      button.classList.toggle('active', active);
+      if (active) {
+        button.setAttribute('aria-current', 'location');
+        activeButton = button;
+      } else {
+        button.removeAttribute('aria-current');
+      }
+    }
+    if (activeButton && !dom.readerNavigator.classList.contains('collapsed')) {
+      activeButton.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  async function gotoTocItem(item) {
+    if (!currentRendition || !item || !item.href) return;
+    try {
+      await currentRendition.display(item.href);
+    } catch (err) {
+      console.warn('Failed to navigate to chapter:', err);
+      showToast('无法打开该章节', 'warning');
+      return;
+    }
+
+    await new Promise(resolve => window.setTimeout(resolve, 40));
+    const location = currentRendition.currentLocation();
+    if (location && location.start) handleLocationChange(location);
+    const targetSection = currentBook && currentBook.spine && currentBook.spine.get(item.href);
+    const targetHref = normalizeReaderHref(item.href);
+    const locationHref = location && location.start && normalizeReaderHref(location.start.href);
+    let anchorCfi = location && location.start && location.start.cfi &&
+      (locationHref === targetHref || locationHref.endsWith('/' + targetHref) || targetHref.endsWith('/' + locationHref))
+      ? location.start.cfi
+      : '';
+    if ((!anchorCfi || normalizeReaderHref(currentChapterId) !== targetHref) && targetSection) {
+      try {
+        await targetSection.load(currentBook.load.bind(currentBook));
+        if (typeof targetSection.cfiFromElement === 'function' && targetSection.document && targetSection.document.body) {
+          anchorCfi = targetSection.cfiFromElement(targetSection.document.body);
+        }
+      } catch (err) {
+        console.warn('Chapter anchor could not be resolved:', err);
+      }
+    }
+    if (!anchorCfi) anchorCfi = getCurrentAnchorCfi();
+    if (anchorCfi && currentBookMeta) {
+      const percent = getLocationCount(currentRendition.book && currentRendition.book.locations) > 0
+        ? percentageFromCfi(anchorCfi)
+        : null;
+      try {
+        await persistReaderProgress(anchorCfi, percent, { force: true });
+      } catch (err) {
+        console.warn('Chapter opened but its position could not be saved:', err);
+        showToast('章节已打开，当前位置将在稍后重试保存', 'warning');
+      }
+    }
+    if (isMobileLayout()) setReaderNavigatorOpen(false);
+  }
+
+  function setReaderNavigatorOpen(open, { restoreFocus = false } = {}) {
+    const shouldOpen = Boolean(open);
+    if (shouldOpen) {
+      if (isMobileLayout()) {
+        setReaderChromeVisible(true);
+        cancelReaderChromeHide();
+      }
+      closeOtherMobileReaderPanels('navigator');
+      if (isMobileLayout()) {
+        setReaderToolsOpen(false, { skipChromeSchedule: true });
+      }
+    }
+    dom.readerNavigator.classList.toggle('open', shouldOpen);
+    dom.readerNavigator.classList.toggle('collapsed', !shouldOpen);
+    dom.readerNavigator.setAttribute('aria-hidden', String(!shouldOpen));
+    dom.readerView.classList.toggle('navigator-open', shouldOpen);
+    syncReaderToolStates();
+    syncReaderPanelBackdrop();
+    if (!shouldOpen) {
+      if (restoreFocus) safeFocus(dom.btnToggleNavigator);
+      scheduleReaderChromeHide();
+    }
+  }
+
+  function toggleReaderNavigator() {
+    setReaderNavigatorOpen(dom.readerNavigator.classList.contains('collapsed'));
+  }
+
+  function cancelReaderNavigatorHoverClose() {
+    if (!readerNavigatorHoverCloseTimer) return;
+    clearTimeout(readerNavigatorHoverCloseTimer);
+    readerNavigatorHoverCloseTimer = null;
+  }
+
+  function openReaderNavigatorOnHover() {
+    if (isMobileLayout()) return;
+    cancelReaderNavigatorHoverClose();
+    setReaderNavigatorOpen(true);
+  }
+
+  function scheduleReaderNavigatorHoverClose() {
+    if (isMobileLayout()) return;
+    cancelReaderNavigatorHoverClose();
+    readerNavigatorHoverCloseTimer = setTimeout(() => {
+      readerNavigatorHoverCloseTimer = null;
+      setReaderNavigatorOpen(false);
+    }, 160);
+  }
+
   // ==================== LIBRARY ====================
+  function getBookInitial(title) {
+    const normalized = String(title || '书').replace(/[《》“”"'\s]/g, '');
+    return Array.from(normalized)[0] || '书';
+  }
+
+  function getStableBookTone(book) {
+    const value = String(book.id || book.book_title || 'marginalia');
+    let hash = 0;
+    for (const char of value) hash = ((hash << 5) - hash + char.codePointAt(0)) | 0;
+    return Math.abs(hash) % 6;
+  }
+
   async function renderLibrary() {
     await mergeDuplicateBooks();
 
@@ -833,42 +1133,49 @@
       const isServer = book._source === 'server';
       const transferState = getTransferState(book);
       const transferProgress = Math.max(0, Math.min(100, book.transfer_progress || 0));
+      const readingProgress = Math.max(0, Math.min(100, Math.round(book.progress_percent || 0)));
+      const bookTitle = book.book_title || '未命名书籍';
+      const lastOpened = formatRelativeDate(book.last_opened);
       card.dataset.bookId = book.id;
+      card.dataset.tone = String(getStableBookTone(book));
       if (isServer) card.dataset.serverBook = 'true';
 
       const highlightCount = await getBookHighlightCount(book.id);
 
       card.innerHTML = `
-        <div class="book-card-cover">${isServer ? '📡' : '📖'}</div>
+        <div class="book-card-cover" aria-hidden="true"><span>${escapeHTML(getBookInitial(bookTitle))}</span></div>
         <div class="book-card-info">
-          <div class="book-card-title">${escapeHTML(book.book_title || '未命名书籍')}</div>
-          <div class="book-card-author">${escapeHTML(book.book_author || '未知作者')}</div>
-          <div class="book-card-meta">
-            <span>✏️ ${highlightCount} 条划线</span>
-            <span>${isServer ? '服务器' : formatRelativeDate(book.last_opened)}</span>
+          <button class="book-card-open" type="button" aria-label="打开《${escapeHTML(bookTitle)}》">
+            <span class="book-card-title">${escapeHTML(bookTitle)}</span>
+            <span class="book-card-author">${escapeHTML(book.book_author || '未知作者')}</span>
+          </button>
+          <div class="book-card-meta" aria-label="书籍信息">
+            <span>${highlightCount} 条划线</span>
+            <span>${isServer ? '服务器 · 云端书籍' : (lastOpened ? `上次阅读 ${escapeHTML(lastOpened)}` : '本机书籍')}</span>
             <span>${escapeHTML(formatKnowledgeStatus(book.knowledge_status))}</span>
           </div>
-          <div class="book-transfer-status" data-state="${escapeHTML(transferState)}">
+          <div class="book-transfer-status" data-state="${escapeHTML(transferState)}" role="status">
+            <span class="book-transfer-dot" aria-hidden="true"></span>
             <span class="book-transfer-label">${escapeHTML(formatTransferStatus(book))}</span>
-            <span class="book-transfer-progress" ${transferState === 'uploading' ? '' : 'hidden'}>
+            <span class="book-transfer-progress" ${transferState === 'uploading' ? '' : 'hidden'} role="progressbar" aria-label="上传进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${transferProgress}">
               <span style="width:${transferProgress}%"></span>
             </span>
-            <button class="book-transfer-retry" data-action="retry-upload"
+            <button class="book-transfer-retry" type="button" data-action="retry-upload" aria-label="重新上传《${escapeHTML(bookTitle)}》"
                     ${transferState === 'failed' || transferState === 'local_only' ? '' : 'hidden'}>
-              重试
+              重试上传
             </button>
           </div>
-          <div class="book-card-progress">
-            <div class="book-card-progress-bar" style="width:${book.progress_percent || 0}%"></div>
+          <div class="book-card-progress-row">
+            <span>阅读进度</span><strong>${readingProgress}%</strong>
+          </div>
+          <div class="book-card-progress" role="progressbar" aria-label="《${escapeHTML(bookTitle)}》阅读进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${readingProgress}">
+            <div class="book-card-progress-bar" style="width:${readingProgress}%"></div>
           </div>
         </div>
-        <button class="book-card-delete" data-action="delete" title="删除">🗑</button>
+        <button class="book-card-delete" type="button" data-action="delete" title="删除书籍" aria-label="删除《${escapeHTML(bookTitle)}》"><span aria-hidden="true">×</span></button>
       `;
 
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('[data-action]')) return;
-        openBook(book);
-      });
+      card.querySelector('.book-card-open').addEventListener('click', () => openBook(book));
 
       const deleteBtn = card.querySelector('.book-card-delete');
       if (deleteBtn) {
@@ -962,7 +1269,8 @@
   }
 
   async function getBookHighlightCount(bookId) {
-    const highlights = await dbGetByIndex('highlights', 'by_book', bookId);
+    const highlights = (await dbGetByIndex('highlights', 'by_book', bookId))
+      .filter(highlight => !highlight.deleted_at);
     return highlights.length;
   }
 
@@ -970,7 +1278,8 @@
     // Delete book record
     await dbDelete('books', bookId);
     // Delete associated highlights
-    const highlights = await dbGetByIndex('highlights', 'by_book', bookId);
+    const highlights = (await dbGetByIndex('highlights', 'by_book', bookId))
+      .filter(highlight => !highlight.deleted_at);
     for (const h of highlights) {
       await queueHighlightDelete(h);
       await dbDelete('highlights', h.id);
@@ -1150,7 +1459,8 @@
 
     for (const book of books) {
       if (book.id === main.id) continue;
-      const highlights = await dbGetByIndex('highlights', 'by_book', book.id);
+      const highlights = (await dbGetByIndex('highlights', 'by_book', book.id))
+        .filter(highlight => !highlight.deleted_at);
       for (const highlight of highlights) {
         await dbPut('highlights', {
           ...highlight,
@@ -1242,7 +1552,8 @@
     }
     await dbPut('books', merged);
 
-    const highlights = await dbGetByIndex('highlights', 'by_book', oldId);
+    const highlights = (await dbGetByIndex('highlights', 'by_book', oldId))
+      .filter(highlight => !highlight.deleted_at);
     for (const highlight of highlights) {
       const updated = {
         ...highlight,
@@ -1456,8 +1767,9 @@
           detail: '正在打开第一页；服务器上传会在后台继续',
           progress: 60,
         });
+        const uploadPromise = uploadLocalBookInBackground(localRecord, e.target.result);
+        uploadPromise.catch(() => {});
         await openBook(localRecord, { skipSync: true });
-        uploadLocalBookInBackground(localRecord, e.target.result).catch(() => {});
       } catch (err) {
         console.error('Import failed:', err);
         setOperationStatus({
@@ -1525,7 +1837,6 @@
 
     if (currentBookMeta && currentBookMeta.id === book.id) {
       currentBookMeta = book;
-      setAiIndexState(book.knowledge_status, book.knowledge_error);
     }
     await renderLibrary();
 
@@ -1547,9 +1858,6 @@
     book.knowledge_status = 'uploading';
     book.knowledge_error = '';
     await dbPut('books', book);
-    if (currentBookMeta && currentBookMeta.id === book.id) {
-      setAiIndexState('uploading');
-    }
     try {
       let resp;
       if (book.filename && !book.file_blob) {
@@ -1589,7 +1897,6 @@
       await dbPut('books', book);
       if (currentBookMeta && currentBookMeta.id === book.id) {
         currentBookMeta = book;
-        setAiIndexState(book.knowledge_status, book.knowledge_error);
       }
       pollKnowledgeStatus(book);
       renderLibrary();
@@ -1602,9 +1909,6 @@
       book.knowledge_status = 'failed';
       book.knowledge_error = err.message;
       await dbPut('books', book);
-      if (currentBookMeta && currentBookMeta.id === book.id) {
-        setAiIndexState('failed', err.message);
-      }
     } finally {
       knowledgeUploadsInFlight.delete(book.id);
     }
@@ -1653,8 +1957,6 @@
         }
         if (currentBookMeta && currentBookMeta.id === book.id) {
           currentBookMeta = book;
-          setAiIndexState(data.status, data.error_message || '');
-          if (data.status === 'ready') await loadAiConversations();
         }
         if (data.status === 'pending' || data.status === 'indexing') {
           aiIndexPollTimer = setTimeout(poll, 2000);
@@ -1662,9 +1964,8 @@
           renderLibrary();
         }
       } catch (err) {
-        if (currentBookMeta && currentBookMeta.id === book.id) {
-          setAiIndexState('failed', '无法读取索引状态');
-        }
+        // The index-status UI left with the AI panel; stop polling quietly.
+        console.warn('Knowledge status poll failed:', err);
       }
     };
     poll();
@@ -1725,7 +2026,8 @@
   }
 
   async function openBook(bookMeta, { skipSync = false } = {}) {
-    showReader();
+    currentBookMeta = bookMeta;
+    await navigateToRoute('/reader');
     setReaderLoading('正在打开书籍…', '正在准备阅读器');
     setLoadingProgress(5);
     const isServerBook = Boolean(
@@ -1740,12 +2042,6 @@
       }
     }
     currentBookMeta = bookMeta;
-    aiMessages = [];
-    aiConversations = [];
-    currentAiConversationId = null;
-    renderAiMessages();
-    renderAiConversationOptions();
-    setAiIndexState(bookMeta.knowledge_status || 'unregistered', bookMeta.knowledge_error || '');
     if (isServerBook || (bookMeta.filename && !bookMeta.file_blob)) {
       ensureKnowledgeBook(bookMeta);
     }
@@ -1801,6 +2097,7 @@
       if (!dom.readerLoading.isConnected) dom.epubContainer.appendChild(dom.readerLoading);
       currentRendition = rendition;
       _boundIframeDocuments = new WeakSet();
+      applyReaderTypography({ refresh: false });
 
       // Track chapter/location changes
       rendition.on('relocated', (location) => {
@@ -1832,7 +2129,6 @@
 
       // Full-book location generation can take minutes for large EPUBs. It is
       // useful for percentages and jumps, but must never block the first page.
-      dom.progressSlider.disabled = true;
       dom.pageText.textContent = '正在计算页码…';
       warmLocationsWithProgress(book).catch((err) => {
         console.warn('Location generation failed:', err);
@@ -1841,10 +2137,12 @@
 
       // Load bookmarks/navigation for chapter titles
       book.loaded.navigation.then((nav) => {
-        // nav.toc gives us chapter structure
-        if (nav.toc && nav.toc.length > 0) {
-          currentBook._toc = nav.toc;
-        }
+        currentBook._toc = Array.isArray(nav.toc) ? nav.toc : [];
+        renderTableOfContents(currentBook._toc);
+        updateTocActiveState(currentChapterId);
+      }).catch((err) => {
+        console.warn('EPUB navigation load failed:', err);
+        renderTableOfContents([]);
       });
 
       dom.epubContainer.style.display = '';
@@ -1877,6 +2175,9 @@
   function handleLocationChange(location) {
     if (!location || !location.start) return;
     currentCfi = location.start.cfi;
+    const nextChapterId = String(location.start.href || '').split('#', 1)[0];
+    if (nextChapterId) currentChapterId = nextChapterId;
+    updateTocActiveState(location.start.href || '');
     let percent = location.start.percentage;
     if (percent == null) {
       percent = percentageFromCfi(currentCfi);
@@ -1885,7 +2186,6 @@
     const pct = Math.round(percent * 100);
 
     // Update progress UI
-    dom.progressSlider.value = pct;
     dom.progressText.textContent = pct + '%';
     updatePageUI();
 
@@ -1965,7 +2265,6 @@
     }
     if (percent == null) return;
     const pct = Math.round(percent * 100);
-    dom.progressSlider.value = pct;
     dom.progressText.textContent = pct + '%';
     updatePageUI();
   }
@@ -2025,6 +2324,157 @@
     } catch (_err) {
       return currentCfi || '';
     }
+  }
+
+  function normalizeReaderFontSize(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return 100;
+    const clamped = Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, parsed));
+    return Math.round(clamped / FONT_SIZE_STEP) * FONT_SIZE_STEP;
+  }
+
+  function normalizeReaderSpacing(value, min, max, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    const clamped = Math.min(max, Math.max(min, parsed));
+    return Number((Math.round(clamped / READER_SPACING_STEP) * READER_SPACING_STEP).toFixed(1));
+  }
+
+  function formatReaderSpacing(value) {
+    return Number(value).toFixed(1);
+  }
+
+  function updateReaderTypographyUI() {
+    if (dom.readerFontFamily) dom.readerFontFamily.value = currentReaderFontFamily;
+    if (dom.readerFontSize) dom.readerFontSize.value = String(currentFontSize);
+    if (dom.readerFontSizeValue) dom.readerFontSizeValue.value = `${currentFontSize}%`;
+    if (dom.btnReaderFontDecrease) dom.btnReaderFontDecrease.disabled = currentFontSize <= FONT_SIZE_MIN;
+    if (dom.btnReaderFontIncrease) dom.btnReaderFontIncrease.disabled = currentFontSize >= FONT_SIZE_MAX;
+    if (dom.readerLineHeight) dom.readerLineHeight.value = formatReaderSpacing(currentReaderLineHeight);
+    if (dom.readerLineHeightValue) dom.readerLineHeightValue.value = formatReaderSpacing(currentReaderLineHeight);
+    if (dom.readerParagraphSpacing) dom.readerParagraphSpacing.value = formatReaderSpacing(currentReaderParagraphSpacing);
+    if (dom.readerParagraphSpacingValue) {
+      dom.readerParagraphSpacingValue.value = `${formatReaderSpacing(currentReaderParagraphSpacing)}em`;
+    }
+  }
+
+  function persistReaderTypographyPreference() {
+    try {
+      localStorage.setItem(READER_TYPOGRAPHY_KEY, JSON.stringify({
+        fontFamily: currentReaderFontFamily,
+        fontSize: currentFontSize,
+        lineHeight: currentReaderLineHeight,
+        paragraphSpacing: currentReaderParagraphSpacing,
+      }));
+    } catch (_err) {
+      // The preference remains active for this session if storage is blocked.
+    }
+  }
+
+  function loadReaderTypographyPreference() {
+    currentReaderFontFamily = 'original';
+    currentFontSize = 100;
+    currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+    currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
+    try {
+      const saved = JSON.parse(localStorage.getItem(READER_TYPOGRAPHY_KEY) || 'null');
+      if (saved && typeof saved === 'object') {
+        if (READER_FONT_FAMILIES.has(saved.fontFamily)) {
+          currentReaderFontFamily = saved.fontFamily;
+        }
+        currentFontSize = normalizeReaderFontSize(saved.fontSize);
+        currentReaderLineHeight = normalizeReaderSpacing(
+          saved.lineHeight,
+          READER_LINE_HEIGHT_MIN,
+          READER_LINE_HEIGHT_MAX,
+          READER_LINE_HEIGHT_DEFAULT
+        );
+        currentReaderParagraphSpacing = normalizeReaderSpacing(
+          saved.paragraphSpacing,
+          READER_PARAGRAPH_SPACING_MIN,
+          READER_PARAGRAPH_SPACING_MAX,
+          READER_PARAGRAPH_SPACING_DEFAULT
+        );
+      }
+    } catch (_err) {
+      currentReaderFontFamily = 'original';
+      currentFontSize = 100;
+      currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
+      currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
+    }
+    updateReaderTypographyUI();
+  }
+
+  function applyReaderTypographyToDocument(doc) {
+    if (!doc || !doc.head || !doc.documentElement) return;
+    const styleId = 'marginalia-reader-typography-style';
+    const existingStyle = doc.getElementById(styleId);
+    const fontStack = READER_FONT_STACKS[currentReaderFontFamily];
+    if (fontStack) {
+      doc.documentElement.setAttribute('data-marginalia-reader-font', currentReaderFontFamily);
+    } else {
+      doc.documentElement.removeAttribute('data-marginalia-reader-font');
+    }
+    const style = existingStyle || doc.createElement('style');
+    style.id = styleId;
+    const fontRule = fontStack ? `body, body * { font-family: ${fontStack} !important; }\n` : '';
+    style.textContent = `${fontRule}:where(body, p, div, li, blockquote) { line-height: ${formatReaderSpacing(currentReaderLineHeight)} !important; }\n:where(p) { margin-block: ${formatReaderSpacing(currentReaderParagraphSpacing)}em !important; }`;
+    if (!existingStyle) doc.head.appendChild(style);
+  }
+
+  function applyReaderTypography({ refresh = true } = {}) {
+    const anchorCfi = getCurrentAnchorCfi();
+    if (currentRendition && currentRendition.themes) {
+      currentRendition.themes.fontSize(`${currentFontSize}%`);
+    }
+    for (const iframe of findReaderIframes()) {
+      try {
+        applyReaderTypographyToDocument(iframe.contentDocument);
+      } catch (_err) {
+        // Ignore inaccessible or not-yet-ready rendition frames.
+      }
+    }
+    if (refresh && currentRendition) {
+      refreshReaderLayout({ anchorCfi });
+    }
+  }
+
+  function setReaderFontSize(value, { persist = true } = {}) {
+    currentFontSize = normalizeReaderFontSize(value);
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
+  }
+
+  function setReaderFontFamily(value, { persist = true } = {}) {
+    currentReaderFontFamily = READER_FONT_FAMILIES.has(value) ? value : 'original';
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
+  }
+
+  function setReaderLineHeight(value, { persist = true } = {}) {
+    currentReaderLineHeight = normalizeReaderSpacing(
+      value,
+      READER_LINE_HEIGHT_MIN,
+      READER_LINE_HEIGHT_MAX,
+      READER_LINE_HEIGHT_DEFAULT
+    );
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
+  }
+
+  function setReaderParagraphSpacing(value, { persist = true } = {}) {
+    currentReaderParagraphSpacing = normalizeReaderSpacing(
+      value,
+      READER_PARAGRAPH_SPACING_MIN,
+      READER_PARAGRAPH_SPACING_MAX,
+      READER_PARAGRAPH_SPACING_DEFAULT
+    );
+    updateReaderTypographyUI();
+    if (persist) persistReaderTypographyPreference();
+    applyReaderTypography();
   }
 
   function restoreLayoutAnchor(anchorCfi, refreshToken, navigationToken) {
@@ -2107,11 +2557,6 @@
       || tagName === 'select';
   }
 
-  function setPageNavigationDisabled(disabled) {
-    if (dom.btnNavPrev) dom.btnNavPrev.disabled = disabled;
-    if (dom.btnNavNext) dom.btnNavNext.disabled = disabled;
-  }
-
   function navigatePageWhenReady(direction, source, attempt = 0) {
     if (isLayoutRefreshing && attempt < 10) {
       return new Promise(resolve => {
@@ -2134,7 +2579,6 @@
     releaseTransferredProgressFloor();
     pageNavigationInProgress = true;
     pageNavigationToken += 1;
-    setPageNavigationDisabled(true);
 
     let navigation;
     try {
@@ -2185,7 +2629,6 @@
     } catch (err) {
       console.warn('Page navigation failed:', source, err);
       pageNavigationInProgress = false;
-      setPageNavigationDisabled(false);
       return Promise.resolve(false);
     }
 
@@ -2201,7 +2644,6 @@
       .finally(() => {
         window.setTimeout(() => {
           pageNavigationInProgress = false;
-          setPageNavigationDisabled(false);
         }, PAGE_NAVIGATION_COOLDOWN);
       });
   }
@@ -2212,7 +2654,6 @@
     if (getLocationCount(book.locations) > 0) {
       locationsReadyBook = book;
       locationsReadyPromise = Promise.resolve();
-      dom.progressSlider.disabled = false;
       updatePageUI();
       return locationsReadyPromise;
     }
@@ -2220,57 +2661,15 @@
     locationsReadyBook = book;
     locationsReadyPromise = book.locations.generate(1000)
       .then(() => {
-        dom.progressSlider.disabled = false;
         updatePageUI();
       })
       .catch((err) => {
         locationsReadyBook = null;
         locationsReadyPromise = null;
-        dom.progressSlider.disabled = true;
         throw err;
       });
 
     return locationsReadyPromise;
-  }
-
-  async function jumpToProgress(percent) {
-    if (!currentRendition || !currentRendition.book || !currentRendition.book.locations) return;
-    releaseTransferredProgressFloor();
-    const jumpToken = ++progressJumpToken;
-    const previousValue = dom.progressSlider.value;
-
-    try {
-      const locations = currentRendition.book.locations;
-      dom.progressSlider.disabled = true;
-      dom.progressText.textContent = getLocationCount(locations) > 0 ? '跳转中...' : '定位中...';
-      setReaderLoading('正在跳转...', '正在定位目标位置');
-      await warmLocationsWithProgress(currentRendition.book);
-      if (jumpToken !== progressJumpToken) return;
-
-      const cfiResult = locations.cfiFromPercentage(percent);
-      const cfi = cfiResult && typeof cfiResult.then === 'function'
-        ? await cfiResult
-        : cfiResult;
-      if (jumpToken !== progressJumpToken) return;
-
-      if (cfi) {
-        await currentRendition.display(cfi);
-        if (jumpToken === progressJumpToken) updateProgressUI();
-      } else {
-        showToast('暂时无法跳转到该位置', 'warning');
-        updateProgressUI();
-      }
-    } catch (err) {
-      console.warn('Progress jump failed:', err);
-      dom.progressSlider.value = previousValue;
-      showToast('进度跳转失败', 'error');
-      updateProgressUI();
-    } finally {
-      if (jumpToken === progressJumpToken) {
-        dom.progressSlider.disabled = false;
-        hideReaderLoading();
-      }
-    }
   }
 
   // ==================== IFRAME NAVIGATION ====================
@@ -3214,23 +3613,31 @@
     if (!currentRendition || !currentRendition.themes) return;
 
     const delta = event.deltaY || event.detail || 0;
-    if (Math.abs(delta) < 10) return;
+    if (!delta) return;
 
     fontZoomLockUntil = Date.now() + WHEEL_IDLE_MS;
     resetWheelGesture();
-
-    if (delta > 0) {
-      currentFontSize = Math.max(FONT_SIZE_MIN, currentFontSize - FONT_SIZE_STEP);
-    } else {
-      currentFontSize = Math.min(FONT_SIZE_MAX, currentFontSize + FONT_SIZE_STEP);
+    if (fontZoomAccumulatedDelta && Math.sign(fontZoomAccumulatedDelta) !== Math.sign(delta)) {
+      fontZoomAccumulatedDelta = 0;
     }
+    fontZoomAccumulatedDelta += delta;
+    if (fontZoomResetTimer) clearTimeout(fontZoomResetTimer);
+    fontZoomResetTimer = setTimeout(() => {
+      fontZoomAccumulatedDelta = 0;
+      fontZoomResetTimer = null;
+    }, WHEEL_IDLE_MS);
+    if (Math.abs(fontZoomAccumulatedDelta) < FONT_ZOOM_DELTA_THRESHOLD) return;
 
-    currentRendition.themes.fontSize(currentFontSize + '%');
+    const direction = fontZoomAccumulatedDelta > 0 ? -1 : 1;
+    fontZoomAccumulatedDelta = 0;
+    setReaderFontSize(currentFontSize + direction * FONT_SIZE_STEP);
   }
 
   // ==================== HIGHLIGHTING / SELECTION ====================
   function enableIframeTextSelection(doc) {
-    if (!doc || !doc.head || doc.getElementById('marginalia-selection-style')) return;
+    if (!doc || !doc.head) return;
+    applyReaderTypographyToDocument(doc);
+    if (doc.getElementById('marginalia-selection-style')) return;
     const style = doc.createElement('style');
     style.id = 'marginalia-selection-style';
     style.textContent = `
@@ -3398,7 +3805,21 @@
     const clientRects = typeof range.getClientRects === 'function'
       ? Array.from(range.getClientRects()).filter(item => item.width || item.height)
       : [];
-    const rect = clientRects[clientRects.length - 1] || range.getBoundingClientRect();
+    const boundingRect = range.getBoundingClientRect();
+    const anchorRect = clientRects[0] || boundingRect;
+    const selectionBounds = clientRects.length
+      ? clientRects.reduce((bounds, item) => ({
+        top: Math.min(bounds.top, item.top),
+        right: Math.max(bounds.right, item.right),
+        bottom: Math.max(bounds.bottom, item.bottom),
+        left: Math.min(bounds.left, item.left),
+      }), {
+        top: clientRects[0].top,
+        right: clientRects[0].right,
+        bottom: clientRects[0].bottom,
+        left: clientRects[0].left,
+      })
+      : boundingRect;
     const frameRect = iframe ? iframe.getBoundingClientRect() : null;
     const toolbar = dom.selectionToolbar;
     const wasHidden = toolbar.hidden;
@@ -3408,9 +3829,11 @@
       toolbar.style.visibility = 'hidden';
     }
 
-    const selectionTop = rect.top + (frameRect ? frameRect.top : 0);
-    const selectionBottom = rect.bottom + (frameRect ? frameRect.top : 0);
-    const selectionLeft = rect.left + (frameRect ? frameRect.left : 0);
+    const frameTop = frameRect ? frameRect.top : 0;
+    const frameLeft = frameRect ? frameRect.left : 0;
+    const selectionTop = selectionBounds.top + frameTop;
+    const selectionBottom = selectionBounds.bottom + frameTop;
+    const anchorLeft = anchorRect.left + frameLeft;
     const visualViewport = window.visualViewport;
     const viewportTop = visualViewport ? visualViewport.offsetTop : 0;
     const viewportLeft = visualViewport ? visualViewport.offsetLeft : 0;
@@ -3419,7 +3842,7 @@
     const edgeGap = 8;
 
     let top = selectionTop - toolbar.offsetHeight - edgeGap;
-    let left = selectionLeft + (rect.width / 2) - (toolbar.offsetWidth / 2);
+    let left = anchorLeft + (anchorRect.width / 2) - (toolbar.offsetWidth / 2);
 
     // Keep the controls inside the visual viewport, including when the soft
     // keyboard is open or the page is running as an installed PWA.
@@ -3701,15 +4124,10 @@
       await queueHighlightDelete(h);
     }
     await dbDelete('highlights', highlightId);
-    selectedMaterialIds.delete(highlightId);
-    if (selectedMaterialId === highlightId) {
-      clearSelectedMaterial();
-    }
     if (editingHighlightId === highlightId) {
       closeNoteEditor();
     }
     await renderNotes();
-    await renderMaterials();
     updateSyncBadge();
     showToast('已删除', 'info');
   }
@@ -3730,7 +4148,8 @@
       return;
     }
 
-    const progress = currentBookMeta.progress_percent || parseInt(dom.progressSlider.value || '0', 10) || 0;
+    const livePct = parseInt((dom.progressText && dom.progressText.textContent || '').replace('%', ''), 10);
+    const progress = currentBookMeta.progress_percent || (Number.isFinite(livePct) ? livePct : 0);
     const chapter = currentChapter || dom.toolbarChapter.textContent || '正文';
     const now = Date.now();
     const bookmark = {
@@ -3823,14 +4242,15 @@
     if (!currentBookMeta) return;
     await renderBookmarks();
 
-    const highlights = await dbGetByIndex('highlights', 'by_book', currentBookMeta.id);
+    const highlights = (await dbGetByIndex('highlights', 'by_book', currentBookMeta.id))
+      .filter(highlight => !highlight.deleted_at);
     // Sort by progress (reading order)
     highlights.sort((a, b) => a.progress_percent - b.progress_percent);
 
     dom.notesCount.textContent = highlights.length + ' 条';
 
     if (highlights.length === 0) {
-      dom.notesList.innerHTML = `
+      dom.readerNotesList.innerHTML = `
         <div class="empty-notes">
           <p>选中文字开始划线</p>
           <p class="empty-hint">划线后可以添加笔记和标签</p>
@@ -3838,7 +4258,7 @@
       return;
     }
 
-    dom.notesList.innerHTML = '';
+    dom.readerNotesList.innerHTML = '';
 
     for (const h of highlights) {
       const item = document.createElement('div');
@@ -3923,7 +4343,7 @@
         await deleteHighlightById(h.id);
       });
 
-      dom.notesList.appendChild(item);
+      dom.readerNotesList.appendChild(item);
     }
   }
 
@@ -3933,6 +4353,7 @@
 
     // Get highlights for this book
     dbGetByIndex('highlights', 'by_book', currentBookMeta.id).then((highlights) => {
+      highlights = highlights.filter(highlight => !highlight.deleted_at);
       if (!highlights || highlights.length === 0) return;
 
       // Apply epub.js annotations for each highlight
@@ -3952,366 +4373,704 @@
       ? forceOpen
       : dom.notesPanel.classList.contains('collapsed');
     if (shouldOpen) {
-      setReaderChromeVisible(true);
-      cancelReaderChromeHide();
+      if (isMobileLayout()) {
+        setReaderChromeVisible(true);
+        cancelReaderChromeHide();
+      }
       closeOtherMobileReaderPanels('notes');
       if (isMobileLayout()) setReaderToolsOpen(false, { skipChromeSchedule: true });
     }
     dom.notesPanel.classList.toggle('open', shouldOpen && isMobileLayout());
     dom.notesPanel.classList.toggle('collapsed', !shouldOpen);
     dom.readerMain.classList.toggle('notes-collapsed', !shouldOpen);
-    refreshReaderLayout();
+    dom.readerView.classList.toggle('notes-open', shouldOpen);
+    if (isMobileLayout()) refreshReaderLayout();
     syncReaderToolStates();
     syncReaderPanelBackdrop();
     if (!shouldOpen) scheduleReaderChromeHide();
   }
 
-  function toggleAiPanel(forceOpen) {
-    const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : dom.aiPanel.classList.contains('collapsed');
-    if (shouldOpen) {
-      setReaderChromeVisible(true);
-      cancelReaderChromeHide();
-      closeOtherMobileReaderPanels('ai');
-      if (isMobileLayout()) setReaderToolsOpen(false, { skipChromeSchedule: true });
-    }
-    dom.aiPanel.classList.toggle('collapsed', !shouldOpen);
-    dom.readerMain.classList.toggle('ai-collapsed', !shouldOpen);
-    refreshReaderLayout();
-    syncReaderToolStates();
-    syncReaderPanelBackdrop();
-    if (shouldOpen) {
-      renderAiMessages();
-      if (!isMobileLayout()) setTimeout(() => dom.aiQuestionInput.focus(), 0);
-    } else {
-      scheduleReaderChromeHide();
-    }
+  function cancelReaderNotesHoverClose() {
+    if (!readerNotesHoverCloseTimer) return;
+    clearTimeout(readerNotesHoverCloseTimer);
+    readerNotesHoverCloseTimer = null;
   }
 
-  function setAiIndexState(status, errorMessage = '') {
-    const messages = {
-      uploading: '正在上传 EPUB 并建立 AI 知识库…',
-      pending: '书籍已入库，正在等待索引…',
-      indexing: '正在解析正文并生成向量索引…',
-      ready: '索引已就绪，回答将严格依据原文与笔记。',
-      failed: errorMessage ? `索引失败：${errorMessage}` : '索引失败，请重试。',
-      outdated: '索引版本已过期，正在重建…',
-      unregistered: '正在准备 AI 索引…',
-    };
-    dom.aiIndexStatus.textContent = messages[status] || messages.unregistered;
-    dom.aiIndexStatus.dataset.state = status === 'ready' ? 'ready' : (status === 'failed' ? 'failed' : '');
-    dom.btnRetryAiIndex.hidden = status !== 'failed';
-    const canAsk = status === 'ready' && !aiRequestInFlight;
-    dom.aiQuestionInput.disabled = !canAsk;
-    dom.btnSendAi.disabled = !canAsk;
+  function openReaderNotesOnHover() {
+    if (isMobileLayout()) return;
+    cancelReaderNotesHoverClose();
+    toggleNotesPanel(true);
   }
 
-  function renderAiConversationOptions() {
-    const options = ['<option value="">新会话</option>'].concat(
-      aiConversations.map(item => (
-        `<option value="${escapeHTML(item.id)}">${escapeHTML(item.title || '新会话')}</option>`
-      ))
-    );
-    dom.aiConversationSelect.innerHTML = options.join('');
-    dom.aiConversationSelect.value = currentAiConversationId || '';
-    dom.btnDeleteAiConversation.disabled = !currentAiConversationId;
+  function scheduleReaderNotesHoverClose() {
+    if (isMobileLayout()) return;
+    cancelReaderNotesHoverClose();
+    readerNotesHoverCloseTimer = setTimeout(() => {
+      readerNotesHoverCloseTimer = null;
+      toggleNotesPanel(false);
+    }, 160);
   }
 
-  async function loadAiConversations(preferredId = currentAiConversationId) {
-    if (!currentBookMeta || !currentBookMeta.knowledge_book_id || currentBookMeta.knowledge_status !== 'ready') {
-      aiConversations = [];
-      currentAiConversationId = null;
-      renderAiConversationOptions();
-      return;
-    }
-    const resp = await fetch(
-      API_BASE + '/api/knowledge/books/' +
-      encodeURIComponent(currentBookMeta.knowledge_book_id) + '/conversations'
-    );
-    if (!resp.ok) throw new Error(`Server responded with ${resp.status}`);
-    const data = await resp.json();
-    aiConversations = data.conversations || [];
-    const preferred = aiConversations.find(item => item.id === preferredId);
-    currentAiConversationId = preferred ? preferred.id : (aiConversations[0] ? aiConversations[0].id : null);
-    renderAiConversationOptions();
-    await loadAiMessages();
-  }
-
-  async function loadAiMessages() {
-    if (!currentAiConversationId) {
-      aiMessages = [];
-      renderAiMessages();
-      return;
-    }
-    const resp = await fetch(
-      API_BASE + '/api/knowledge/conversations/' +
-      encodeURIComponent(currentAiConversationId) + '/messages?limit=100'
-    );
-    if (!resp.ok) throw new Error(`Server responded with ${resp.status}`);
-    const data = await resp.json();
-    aiMessages = (data.messages || []).map(item => ({
-      id: item.id,
-      role: item.role,
-      content: item.content,
-      status: item.status,
-      citations: item.citations || [],
-    }));
-    renderAiMessages();
-  }
-
-  async function createAiConversation() {
-    if (!currentBookMeta || currentBookMeta.knowledge_status !== 'ready') return null;
-    const resp = await fetch(
-      API_BASE + '/api/knowledge/books/' +
-      encodeURIComponent(currentBookMeta.knowledge_book_id) + '/conversations',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: '' }),
-      }
-    );
-    if (!resp.ok) throw new Error(`Server responded with ${resp.status}`);
-    const conversation = await resp.json();
-    currentAiConversationId = conversation.id;
-    aiConversations.unshift(conversation);
-    aiMessages = [];
-    renderAiConversationOptions();
-    renderAiMessages();
-    return conversation;
-  }
-
-  async function deleteCurrentAiConversation() {
-    if (!currentAiConversationId || !confirm('确定删除当前 AI 问答会话吗？')) return;
-    const resp = await fetch(
-      API_BASE + '/api/knowledge/conversations/' +
-      encodeURIComponent(currentAiConversationId),
-      { method: 'DELETE' }
-    );
-    if (!resp.ok) {
-      showToast('会话删除失败', 'error');
-      return;
-    }
-    currentAiConversationId = null;
-    await loadAiConversations();
-    showToast('会话已删除', 'info');
-  }
-
-  function renderAiMessages() {
-    if (aiMessages.length === 0) {
-      dom.aiMessages.innerHTML = '<div class="ai-empty">问一个和这本书有关的问题。</div>';
-      return;
-    }
-    dom.aiMessages.innerHTML = aiMessages.map((msg, messageIndex) => {
-      const citations = (msg.citations || []).map((citation, citationIndex) => `
-        <button class="ai-citation" type="button"
-          data-message-index="${messageIndex}" data-citation-index="${citationIndex}">
-          <strong>[${escapeHTML(citation.label || '')}] ${escapeHTML(citation.chapter || '划线与感悟')}</strong><br>
-          ${escapeHTML((citation.quote || '').slice(0, 120))}
-        </button>
-      `).join('');
-      const stateClass = msg.status === 'streaming' ? ' streaming' : '';
-      return `<div class="ai-message ${msg.role}${stateClass}">
-        ${escapeHTML(msg.content)}
-        ${citations ? `<div class="ai-citations">${citations}</div>` : ''}
-      </div>`;
-    }).join('');
-    dom.aiMessages.querySelectorAll('.ai-citation').forEach(button => {
-      button.addEventListener('click', () => {
-        const message = aiMessages[Number(button.dataset.messageIndex)];
-        const citation = message && message.citations[Number(button.dataset.citationIndex)];
-        if (citation) jumpToAiCitation(citation);
-      });
-    });
-    dom.aiMessages.scrollTop = dom.aiMessages.scrollHeight;
-  }
-
-  function addAiMessage(role, content, extra = {}) {
-    const message = { role, content, status: 'completed', citations: [], ...extra };
-    aiMessages.push(message);
-    renderAiMessages();
-    return message;
-  }
-
-  async function collectBookQaContext(question) {
-    const highlights = currentBookMeta
-      ? await dbGetByIndex('highlights', 'by_book', currentBookMeta.id)
-      : [];
-    highlights.sort((a, b) => (a.progress_percent || 0) - (b.progress_percent || 0));
+  // ==================== NOTES MANAGEMENT ====================
+  function createDefaultNotesQuery() {
     return {
-      question,
-      knowledge_book_id: currentBookMeta ? currentBookMeta.knowledge_book_id : null,
-      book_title: currentBookMeta ? currentBookMeta.book_title || '' : '',
-      book_author: currentBookMeta ? currentBookMeta.book_author || '' : '',
-      chapter: currentChapter || '',
-      progress_percent: currentBookMeta ? currentBookMeta.progress_percent || 0 : 0,
-      highlights: highlights.map(h => ({
-        id: h.id || '',
-        cfi: h.cfi || '',
-        highlight_text: h.highlight_text || '',
-        note: h.note || '',
-        tags: h.tags || [],
-        chapter: h.chapter || '',
-        progress_percent: h.progress_percent || 0,
-      })),
+      q: '', bookId: '', tags: [], noteKind: 'all', color: '', view: 'active',
+      sort: 'updated_desc', dataScope: 'all', limit: 50, offset: 0,
     };
   }
 
-  async function parseSseResponse(response, onEvent) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() || '';
-      for (const block of blocks) {
-        let event = 'message';
-        let data = '';
-        for (const line of block.split(/\r?\n/)) {
-          if (line.startsWith('event:')) event = line.slice(6).trim();
-          if (line.startsWith('data:')) data += line.slice(5).trim();
-        }
-        if (!data) continue;
-        onEvent(event, JSON.parse(data));
-      }
-      if (done) break;
+  function buildNotesQueryParams(query, { includePaging = true } = {}) {
+    const params = new URLSearchParams();
+    const q = String(query.q || '').trim();
+    if (q.length >= 2) params.set('q', q);
+    if (query.bookId) params.set('book_id', query.bookId);
+    if (query.tags?.length) query.tags.forEach(tag => params.append('tag', tag));
+    if (query.noteKind && query.noteKind !== 'all') params.set('note_kind', query.noteKind === 'highlight' ? 'highlight_only' : query.noteKind);
+    if (query.color) params.set('color', query.color);
+    if (query.view && query.view !== 'active') params.set('view', query.view);
+    if (query.sort) params.set('sort', query.sort);
+    if (includePaging) {
+      params.set('limit', String(query.limit));
+      params.set('offset', String(query.offset));
+    }
+    return params;
+  }
+
+  async function fetchServerNotes(query) {
+    if (String(query.q || '').trim().length === 1) {
+      throw new Error('至少输入 2 个字符');
+    }
+    const response = await fetchWithTimeout(API_BASE + '/api/notes?' + buildNotesQueryParams(query));
+    if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+    return response.json();
+  }
+
+  function getNoteAliases(note) {
+    return [note.server_id, note.id, note.client_id].filter(Boolean).map(String);
+  }
+
+  function getStableNoteKey(note) {
+    return getNoteAliases(note)[0] || '';
+  }
+
+  function filterAndSortLocalNotes(items, query) {
+    const q = String(query.q || '').trim().toLowerCase();
+    const filtered = items.filter(note => {
+      if (query.view === 'trash' ? !note.deleted_at : note.deleted_at) return false;
+      if (query.bookId && note.book_id !== query.bookId) return false;
+      if (query.noteKind === 'reflected' && !note.note) return false;
+      if ((query.noteKind === 'highlight' || query.noteKind === 'highlight_only') && note.note) return false;
+      if (query.color && note.color !== query.color) return false;
+      if (query.tags?.length && !query.tags.every(tag => (note.tags || []).includes(tag))) return false;
+      if (q && ![note.highlight_text, note.note, note.book_title, note.book_author, note.chapter, ...(note.tags || [])]
+        .join(' ').toLowerCase().includes(q)) return false;
+      return true;
+    });
+    const sortValue = (note) => {
+      if (query.sort === 'created_desc') return String(note.created_at || '');
+      if (query.sort === 'position') return [Number(note.progress_percent || 0), String(note.created_at || ''), String(note.id || '')];
+      if (query.sort === 'book') return [String(note.book_title || ''), Number(note.progress_percent || 0), String(note.created_at || ''), String(note.id || '')];
+      return [String(note.updated_at || ''), String(note.id || '')];
+    };
+    return filtered.sort((a, b) => {
+      const av = sortValue(a); const bv = sortValue(b);
+      if (query.sort === 'position') return av[0] - bv[0] || av[1].localeCompare(bv[1]) || av[2].localeCompare(bv[2]);
+      if (query.sort === 'book') return av[0].localeCompare(bv[0]) || av[1] - bv[1] || av[2].localeCompare(bv[2]) || av[3].localeCompare(bv[3]);
+      return bv[0].localeCompare(av[0]) || bv[1].localeCompare(av[1]);
+    });
+  }
+
+  function getLocalNotesFacets(items) {
+    const books = new Map();
+    items.forEach(note => {
+      if (note.book_id) books.set(note.book_id, { id: note.book_id, title: note.book_title || note.book_id });
+    });
+    const tags = [...new Set(items.flatMap(note => note.tags || []))];
+    const noteKinds = [...new Set(items.map(note => note.note ? 'reflected' : 'highlight'))];
+    const colors = [...new Set(items.map(note => note.color).filter(Boolean))];
+    return {
+      books: [...books.values()],
+      tags: tags.map(name => ({ name, count: items.filter(note => (note.tags || []).includes(name)).length })),
+      note_kinds: noteKinds.map(name => ({ name, count: items.filter(note => (note.note ? 'reflected' : 'highlight') === name).length })),
+      colors: colors.map(name => ({ name, count: items.filter(note => note.color === name).length })),
+    };
+  }
+
+  async function loadOfflineNotes(query) {
+    const local = await dbGetAllSafe('highlights');
+    const matching = filterAndSortLocalNotes(local, query);
+    const facetQuery = { ...query, bookId: '', tags: [], color: '' };
+    const facetItems = filterAndSortLocalNotes(local, facetQuery);
+    return { items: matching, total: matching.length, has_more: false, facets: getLocalNotesFacets(facetItems) };
+  }
+
+  async function loadPendingNotes(query = notesQuery) {
+    const [local, queued] = await Promise.all([
+      dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue'),
+    ]);
+    const pendingKeys = new Set(queued.flatMap(operation => [operation.entity_id, operation.payload?.id, operation.payload?.client_id, operation.payload?.server_id]
+      .filter(Boolean).map(String)));
+    const pendingQuery = { ...query };
+    return filterAndSortLocalNotes(local.filter(note => pendingKeys.has(String(note.id))
+      || pendingKeys.has(String(note.client_id)) || pendingKeys.has(String(note.server_id)) || !note.synced), pendingQuery);
+  }
+
+  function mergeServerAndLocalNotes(serverItems, localItems, queuedOperations, query = notesQuery) {
+    const aliases = new Map();
+    const merged = new Map();
+    const add = (item, allowNew) => {
+      const known = getNoteAliases(item).map(alias => aliases.get(alias)).find(Boolean);
+      const key = known || getStableNoteKey(item);
+      if (!key || (!allowNew && !merged.has(key))) return;
+      merged.set(key, { ...merged.get(key), ...item });
+      getNoteAliases(item).forEach(alias => aliases.set(alias, key));
+    };
+    serverItems.forEach(item => add(item, true));
+    localItems.filter(item => !item.synced && (query.view === 'trash' ? item.deleted_at : !item.deleted_at))
+      .forEach(item => add(item, false));
+    queuedOperations.forEach(operation => {
+      const payload = operation.payload || {};
+      const operationAliases = [operation.entity_id, payload.id, payload.client_id, payload.server_id].filter(Boolean).map(String);
+      const key = operationAliases.map(alias => aliases.get(alias) || alias).find(Boolean);
+      if (!key) return;
+      operationAliases.forEach(alias => aliases.set(alias, key));
+      if (operation.type.endsWith('.delete')) merged.delete(key);
+      else if (operation.type.endsWith('.trash')) {
+        const current = merged.get(key);
+        if (query.view === 'trash') merged.set(key, { ...current, ...payload, deleted_at: payload.deleted_at || current?.deleted_at || new Date().toISOString(), synced: false });
+        else merged.delete(key);
+      } else if (operation.type.endsWith('.restore')) {
+        if (query.view === 'trash') merged.delete(key);
+        else merged.set(key, { ...merged.get(key), ...payload, deleted_at: null, synced: false });
+      } else merged.set(key, { ...merged.get(key), ...payload, synced: false });
+    });
+    return [...merged.values()];
+  }
+
+  function renderNotesFacets(facets) {
+    if (!facets) return;
+    const fill = (element, values, valueKey, labelKey) => {
+      if (!element || !Array.isArray(values)) return;
+      const current = element.value;
+      element.innerHTML = '<option value="">全部</option>' + values.map(value => {
+        const optionValue = typeof value === 'object' ? value[valueKey] : value;
+        const label = typeof value === 'object' ? (value[labelKey] || optionValue) : value;
+        return `<option value="${escapeHTML(optionValue)}">${escapeHTML(label)}</option>`;
+      }).join('');
+      if ([...element.options].some(option => option.value === current)) element.value = current;
+    };
+    fill(dom.notesBookFilter, facets.books, 'id', 'title');
+    fill(dom.notesTagFilter, facets.tags, 'name', 'name');
+    fill(dom.notesColorFilter, facets.colors, 'name', 'name');
+  }
+
+  function normalizeTagsInput(value) {
+    const seen = new Set();
+    return String(value || '').split(/[,，]/).map(tag => tag.trim()).filter(tag => tag && !seen.has(tag) && seen.add(tag));
+  }
+
+  function createManagedNoteDraft(note) {
+    return { ...note, note: note.note || '', tags: [...(note.tags || [])], color: note.color || 'yellow' };
+  }
+
+  function isManagedNoteDraftDirty() {
+    if (!managedNoteDraft || !managedNoteOriginal) return false;
+    return managedNoteDraft.note !== managedNoteOriginal.note
+      || managedNoteDraft.color !== managedNoteOriginal.color
+      || JSON.stringify(managedNoteDraft.tags || []) !== JSON.stringify(managedNoteOriginal.tags || []);
+  }
+
+  function renderManagedNoteDetail() {
+    const note = managedNoteDraft;
+    if (!note || !dom.notesDetailPane) return;
+    dom.notesDetailPane.classList.add('is-open');
+    dom.notesDetailPane.setAttribute('tabindex', '-1');
+    dom.notesDetailPane.setAttribute('role', 'dialog');
+    dom.notesDetailPane.setAttribute('aria-modal', 'true');
+    dom.notesDetailPane.setAttribute('aria-labelledby', 'managed-note-title');
+    dom.notesDetailPane.innerHTML = `
+      <div class="notes-detail-content">
+        <div class="notes-detail-heading">
+          <div><span class="eyebrow">Note detail</span><h2 id="managed-note-title" tabindex="-1">笔记详情</h2></div>
+          <button class="btn btn-ghost btn-sm" id="btn-close-managed-note" type="button" aria-label="关闭笔记详情">关闭</button>
+        </div>
+        <section class="notes-detail-section notes-detail-readonly" aria-labelledby="managed-note-source-title">
+          <div class="notes-detail-section-heading"><h3 id="managed-note-source-title">原文与出处</h3><span class="note-color-dot highlight-${escapeHTML(note.color)}" aria-label="${escapeHTML(note.color)} 高亮"></span></div>
+          <label class="notes-detail-quote">划线原文<textarea aria-label="划线原文" readonly>${escapeHTML(note.highlight_text || '')}</textarea></label>
+          <dl class="notes-detail-metadata">
+            <div><dt>书名</dt><dd>${escapeHTML(note.book_title || '未命名书籍')}</dd></div>
+            <div><dt>作者</dt><dd>${escapeHTML(note.book_author || '未知作者')}</dd></div>
+            <div><dt>章节</dt><dd>${escapeHTML(note.chapter || '未记录章节')}</dd></div>
+            <div><dt>阅读进度</dt><dd>${escapeHTML(String(note.progress_percent ?? 0))}%</dd></div>
+            <div><dt>创建时间</dt><dd>${escapeHTML(note.created_at || '未记录')}</dd></div>
+          </dl>
+          <details class="notes-location-details"><summary>查看定位信息</summary><textarea aria-label="定位信息" readonly>${escapeHTML(note.cfi_range || note.cfi || '')}</textarea></details>
+        </section>
+        <section class="notes-detail-section notes-detail-edit" aria-labelledby="managed-note-edit-title">
+          <div class="notes-detail-section-heading"><h3 id="managed-note-edit-title">整理与编辑</h3><span>修改后请保存</span></div>
+          <label>感悟<textarea id="managed-note-text" aria-label="感悟" placeholder="写下这段文字带来的思考">${escapeHTML(note.note || '')}</textarea></label>
+          <label>标签<input id="managed-note-tags" aria-label="标签" value="${escapeHTML((note.tags || []).join(', '))}" placeholder="阅读, 重读"></label>
+          <label>高亮颜色<select id="managed-note-color" aria-label="高亮颜色"><option value="yellow">黄色</option><option value="green">绿色</option><option value="blue">蓝色</option><option value="pink">粉色</option></select></label>
+        </section>
+        <div class="notes-detail-actions"><button class="btn btn-danger" id="btn-delete-managed-reflection" type="button" ${note.note ? '' : 'disabled'}>删除感悟</button><button class="btn btn-primary" id="btn-save-managed-note" type="button">保存笔记</button></div>
+      </div>`;
+    $('#managed-note-color').value = note.color;
+    $('#managed-note-text').addEventListener('input', e => { managedNoteDraft.note = e.target.value; });
+    $('#managed-note-tags').addEventListener('input', e => { managedNoteDraft.tags = normalizeTagsInput(e.target.value); });
+    $('#managed-note-color').addEventListener('change', e => { managedNoteDraft.color = e.target.value; });
+    $('#btn-save-managed-note').addEventListener('click', saveManagedNoteDraft);
+    $('#btn-delete-managed-reflection').addEventListener('click', deleteManagedNoteReflection);
+    $('#btn-close-managed-note').addEventListener('click', () => requestNotesNavigation(() => closeManagedNote()));
+    setTimeout(() => $('#btn-close-managed-note')?.focus(), 0);
+  }
+
+  function closeManagedNote() {
+    managedNoteDraft = null;
+    managedNoteOriginal = null;
+    if (dom.notesDetailPane) {
+      dom.notesDetailPane.classList.remove('is-open');
+      dom.notesDetailPane.removeAttribute('role');
+      dom.notesDetailPane.removeAttribute('aria-modal');
+      dom.notesDetailPane.removeAttribute('aria-labelledby');
+      dom.notesDetailPane.removeAttribute('tabindex');
+      dom.notesDetailPane.innerHTML = '<div class="empty-state"><p>选择一条笔记查看详情</p></div>';
+    }
+    const trigger = managedNoteTrigger;
+    managedNoteTrigger = null;
+    if (trigger && document.contains(trigger)) safeFocus(trigger);
+  }
+
+  async function openManagedNote(note) {
+    managedNoteTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    managedNoteOriginal = createManagedNoteDraft(note);
+    managedNoteDraft = createManagedNoteDraft(note);
+    renderManagedNoteDetail();
+  }
+
+  async function saveManagedNoteDraft() {
+    if (!managedNoteDraft) return false;
+    const updated = { ...managedNoteDraft, tags: normalizeTagsInput((managedNoteDraft.tags || []).join(',')), synced: false, updated_at: new Date().toISOString(), status: managedNoteDraft.note ? 'reflected' : 'raw' };
+    try {
+      await dbPut('highlights', updated);
+      if (updated.book_id) await queueReaderSync(updated.book_id, 'highlight.upsert', updated.id, updated);
+      managedNoteDraft = createManagedNoteDraft(updated);
+      managedNoteOriginal = createManagedNoteDraft(updated);
+      const index = notesItems.findIndex(item => item.id === updated.id);
+      if (index >= 0) notesItems[index] = { ...notesItems[index], ...updated };
+      renderManagedNoteDetail();
+      renderNotesManagement(notesItems);
+      updateSyncBadge();
+      showToast('笔记已保存', 'success');
+      return true;
+    } catch (error) {
+      showToast('保存失败，请重试', 'error');
+      return false;
     }
   }
 
-  async function askBookQuestion(question) {
-    const trimmed = question.trim();
-    if (!trimmed) return;
-    if (!currentBookMeta) {
-      showToast('请先打开一本书', 'info');
+  function requestNotesNavigation(action) {
+    if (!isManagedNoteDraftDirty()) return Promise.resolve(action());
+    const currentHash = `#${currentRoute || '/creation'}`;
+    dom.notesUnsavedDialog.hidden = false;
+    const buttons = dom.notesUnsavedDialog.querySelectorAll('button');
+    return new Promise(resolve => {
+      buttons[0].onclick = () => {
+        dom.notesUnsavedDialog.hidden = true;
+        if (window.location.hash !== currentHash) history.replaceState({}, '', currentHash);
+        if (currentRoute) renderRoute(currentRoute);
+        resolve(false);
+      };
+      buttons[1].onclick = () => { dom.notesUnsavedDialog.hidden = true; closeManagedNote(); resolve(action()); };
+      buttons[2].onclick = async () => { if (await saveManagedNoteDraft()) { dom.notesUnsavedDialog.hidden = true; resolve(action()); } };
+    });
+  }
+
+  async function deleteManagedNoteReflection() {
+    if (!managedNoteDraft) return;
+    const previous = createManagedNoteDraft(managedNoteDraft);
+    managedNoteUndo = null;
+    managedNoteDraft.note = '';
+    const saved = await saveManagedNoteDraft();
+    if (!saved) {
+      managedNoteDraft = previous;
+      renderManagedNoteDetail();
+      showToast('感悟删除失败', 'error');
       return;
     }
-    if (aiRequestInFlight) return;
-    if (currentBookMeta.knowledge_status !== 'ready') {
-      showToast('请等待书籍 AI 索引完成', 'info');
-      return;
-    }
-
-    toggleAiPanel(true);
-    if (!currentAiConversationId) await createAiConversation();
-    addAiMessage('user', trimmed);
-    dom.aiQuestionInput.value = '';
-    aiRequestInFlight = true;
-    setAiIndexState('ready');
-    const assistantMessage = addAiMessage('assistant', '', { status: 'streaming' });
-
-    try {
-      const payload = await collectBookQaContext(trimmed);
-      const resp = await fetch(
-        API_BASE + '/api/knowledge/conversations/' +
-        encodeURIComponent(currentAiConversationId) + '/messages/stream',
-        {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: trimmed,
-          current_location: {
-            chapter: payload.chapter,
-            href: currentCfi && currentBook && currentBook.spine
-              ? ((currentBook.spine.get(currentCfi) || {}).href || '')
-              : '',
-            cfi: currentCfi || '',
-            progress_percent: payload.progress_percent,
-          },
-          local_highlights: payload.highlights,
-        }),
-      });
-      if (!resp.ok) {
-        const error = await resp.json().catch(() => ({}));
-        const detail = error.detail && (error.detail.message || error.detail);
-        throw new Error(typeof detail === 'string' ? detail : `Server responded with ${resp.status}`);
+    managedNoteUndo = previous;
+    showToast('感悟已删除', 'success');
+    const toastButton = document.createElement('button');
+    toastButton.type = 'button'; toastButton.textContent = '撤销'; toastButton.className = 'btn btn-ghost btn-sm';
+    toastButton.onclick = async () => {
+      if (!managedNoteUndo) return;
+      managedNoteDraft = createManagedNoteDraft(managedNoteUndo);
+      const restored = await saveManagedNoteDraft();
+      if (restored) {
+        managedNoteUndo = null;
+        showToast('感悟已恢复', 'success');
+      } else {
+        showToast('撤销失败，请重试', 'error');
+        dom.toast.appendChild(toastButton);
+        dom.toast.hidden = false;
       }
-      let streamError = null;
-      await parseSseResponse(resp, (event, data) => {
-        if (event === 'delta') assistantMessage.content += data.text || '';
-        if (event === 'citations') assistantMessage.citations = data.items || [];
-        if (event === 'done') assistantMessage.status = 'completed';
-        if (event === 'error') streamError = new Error(data.message || 'AI 问答失败');
-        renderAiMessages();
-      });
-      if (streamError) throw streamError;
-      assistantMessage.status = 'completed';
-      if (!assistantMessage.content) assistantMessage.content = '没有返回回答。';
-      renderAiMessages();
-      await loadAiConversations(currentAiConversationId);
-    } catch (err) {
-      console.error('Book Q&A failed:', err);
-      assistantMessage.role = 'error';
-      assistantMessage.status = 'failed';
-      assistantMessage.content = assistantMessage.content || ('问答失败：' + (
-        typeof err.message === 'string' ? err.message : '未知错误'
-      ));
-      renderAiMessages();
-    } finally {
-      aiRequestInFlight = false;
-      setAiIndexState(currentBookMeta.knowledge_status, currentBookMeta.knowledge_error || '');
+    };
+    dom.toast.appendChild(toastButton);
+    if (managedNoteUndoTimer) clearTimeout(managedNoteUndoTimer);
+    managedNoteUndoTimer = setTimeout(() => { managedNoteUndo = null; }, 5000);
+  }
+
+  function selectedNotes() {
+    return notesItems.filter(note => notesSelection.has(getStableNoteKey(note)));
+  }
+
+  function updateNotesSelectionUi() {
+    const count = notesSelection.size;
+    if (dom.notesSelectionCount) dom.notesSelectionCount.textContent = `已选择 ${count} 条`;
+    [dom.btnBatchAddTag, dom.btnBatchRemoveTag, dom.btnBatchTrash, dom.btnBatchRestore, dom.btnBatchDelete]
+      .filter(Boolean).forEach(button => { button.disabled = count === 0; });
+    if (dom.notesSelectPage) {
+      const pageKeys = notesItems.map(getStableNoteKey).filter(Boolean);
+      dom.notesSelectPage.checked = pageKeys.length > 0 && pageKeys.every(key => notesSelection.has(key));
+      dom.notesSelectPage.indeterminate = pageKeys.some(key => notesSelection.has(key)) && !dom.notesSelectPage.checked;
     }
   }
 
-  function findTextRange(doc, anchorText) {
-    const target = String(anchorText || '').replace(/\s+/g, ' ').trim();
-    if (!target) return null;
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-    const positions = [];
-    let normalized = '';
-    let previousSpace = false;
-    let node;
-    while ((node = walker.nextNode())) {
-      for (let i = 0; i < node.nodeValue.length; i += 1) {
-        const char = node.nodeValue[i];
-        const isSpace = /\s/.test(char);
-        if (isSpace && previousSpace) continue;
-        normalized += isSpace ? ' ' : char;
-        positions.push({ node, offset: i });
-        previousSpace = isSpace;
-      }
-    }
-    const start = normalized.indexOf(target);
-    if (start < 0) return null;
-    const end = Math.min(positions.length - 1, start + target.length - 1);
-    const range = doc.createRange();
-    range.setStart(positions[start].node, positions[start].offset);
-    range.setEnd(positions[end].node, positions[end].offset + 1);
-    return range;
+  function renderNotesManagement(items) {
+    if (!dom.notesManagementList) return;
+    dom.notesManagementList.innerHTML = items.length ? items.map(note => {
+      const key = getStableNoteKey(note);
+      const trash = notesQuery.view === 'trash';
+      const tags = (note.tags || []).map(tag => `<span class="note-management-tag">${escapeHTML(tag)}</span>`).join('');
+      const chapter = note.chapter || '未记录章节';
+      const progress = Math.max(0, Math.min(100, Math.round(note.progress_percent || 0)));
+      return `<article class="note-management-card highlight-${escapeHTML(note.color || 'yellow')}" data-note-id="${escapeHTML(note.id)}">
+        <label class="note-management-select"><input type="checkbox" aria-label="选择 ${escapeHTML(note.highlight_text || '')}" data-note-select="${escapeHTML(key)}" ${notesSelection.has(key) ? 'checked' : ''}></label>
+        <button class="note-management-card-button" type="button" ${trash ? 'aria-disabled="true" tabindex="-1"' : ''} aria-label="${trash ? '回收站笔记' : '查看笔记详情'}：${escapeHTML(note.highlight_text || '无原文')}">
+          <span class="note-management-source"><span class="note-color-dot" aria-hidden="true"></span><span class="note-management-book">${escapeHTML(note.book_title || '未命名书籍')}</span><span aria-hidden="true">·</span><span>${escapeHTML(chapter)}</span></span>
+          <strong class="note-management-quote">${escapeHTML(note.highlight_text || '无划线原文')}</strong>
+          <span class="note-management-reflection ${note.note ? 'has-note' : ''}"><b>${note.note ? '感悟' : '感悟待补'}</b>${escapeHTML(note.note || '还没有写下感悟')}</span>
+          <span class="note-management-footer">
+            <span class="note-management-tags">${tags || '<span class="note-management-tag is-empty">无标签</span>'}</span>
+            <span class="note-management-progress">${progress}%</span>
+            ${note.synced === false ? '<span class="note-management-sync">待同步</span>' : ''}
+          </span>
+        </button>
+      </article>`;
+    }).join('') : '<div class="empty-state notes-empty-state"><div class="empty-icon" aria-hidden="true">记</div><p class="empty-state-title">还没有可显示的笔记</p><p class="empty-hint">试试清空筛选，或在阅读时划线并写下感悟。</p></div>';
+    dom.notesManagementList.querySelectorAll('[data-note-select]').forEach(input => input.addEventListener('change', () => {
+      if (input.checked) notesSelection.add(input.dataset.noteSelect); else notesSelection.delete(input.dataset.noteSelect);
+      input.closest('.note-management-card')?.classList.toggle('is-selected', input.checked);
+      updateNotesSelectionUi();
+    }));
+    dom.notesManagementList.querySelectorAll('.note-management-card-button').forEach(button => button.addEventListener('click', () => {
+      if (notesQuery.view === 'trash') return;
+      const note = notesItems.find(item => item.id === button.closest('[data-note-id]').dataset.noteId);
+      requestNotesNavigation(() => openManagedNote(note));
+    }));
+    if (dom.notesPageStatus) dom.notesPageStatus.textContent = `第 ${Math.floor(notesQuery.offset / notesQuery.limit) + 1} 页`;
+    if (dom.notesPrevious) dom.notesPrevious.disabled = notesQuery.offset === 0;
+    if (dom.notesNext) dom.notesNext.disabled = !notesHasMore;
+    if (dom.notesTrashActions) dom.notesTrashActions.hidden = notesQuery.view !== 'trash';
+    updateNotesSelectionUi();
   }
 
-  async function jumpToAiCitation(citation) {
-    if (!currentRendition || !currentBook) return;
-    try {
-      let cfi = citation.cfi || '';
-      if (!cfi && citation.href) {
-        let section = currentBook.spine.get(citation.href);
-        if (!section && currentBook.spine.spineItems) {
-          section = currentBook.spine.spineItems.find(item => (
-            item.href === citation.href || item.href.endsWith(citation.href)
-          ));
-        }
-        if (section) {
-          await section.load(currentBook.load.bind(currentBook));
-          const range = findTextRange(section.document, citation.anchor_text || citation.quote);
-          if (range) cfi = section.cfiFromRange(range);
-        }
-      }
-      await currentRendition.display(cfi || citation.href);
-      if (cfi) {
-        currentRendition.annotations.highlight(cfi, {}, () => {}, 'ai-citation', {
-          fill: '#d99a2b',
-          'fill-opacity': '0.35',
+  function showNotesConfirm(message, { tags = false, danger = false, confirmLabel = '确认' } = {}) {
+    dom.notesCountConfirmMessage.textContent = message;
+    dom.notesBatchTagField.hidden = !tags;
+    const confirmButton = dom.notesCountConfirmDialog.querySelector('.modal-footer button:last-child');
+    confirmButton.textContent = confirmLabel;
+    confirmButton.className = `btn ${danger ? 'btn-danger' : 'btn-primary'}`;
+    dom.notesCountConfirmDialog.hidden = false;
+    if (tags) dom.notesBatchTags.value = '';
+    return new Promise(resolve => {
+      const buttons = dom.notesCountConfirmDialog.querySelectorAll('.modal-footer button');
+      buttons[0].onclick = () => { dom.notesCountConfirmDialog.hidden = true; resolve(null); };
+      buttons[1].onclick = () => { dom.notesCountConfirmDialog.hidden = true; resolve(tags ? normalizeTagsInput(dom.notesBatchTags.value) : true); };
+    });
+  }
+
+  async function applyLocalNoteOperation(note, type, payload = {}) {
+    if (!note.book_id) throw new Error('该历史记录需联网后操作');
+    const updated = { ...note };
+    if (type === 'highlight.trash') updated.deleted_at = payload.deleted_at || new Date().toISOString();
+    if (type === 'highlight.restore') updated.deleted_at = null;
+    if (type === 'highlight.delete') {
+      await dbDelete('highlights', note.id);
+    } else {
+      updated.synced = false;
+      await dbPut('highlights', updated);
+    }
+    await dbPut('sync_queue', {
+      id: `${type}:${note.book_id}:${note.client_id || note.id}`,
+      op_id: uuid(), book_id: note.book_id, type,
+      entity_id: note.client_id || note.id, payload, queued_at: Date.now(),
+    });
+    updateSyncBadge();
+  }
+
+  async function applyNotesBatch(type, payload = {}) {
+    const notes = selectedNotes();
+    if (!notes.length) return false;
+    if (navigator.onLine) {
+      const ids = notes.map(note => note.server_id || note.id);
+      const endpoint = type === 'tags' ? 'tags' : type;
+      const operationId = uuid();
+      try {
+        const response = await fetchWithTimeout(`${API_BASE}/api/notes/batch/${endpoint}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operation_id: operationId, ids, ...payload }),
         });
-        setTimeout(() => {
-          try { currentRendition.annotations.remove(cfi, 'highlight'); } catch (_e) {}
-        }, 2500);
+        if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+        const result = await response.json();
+        const affected = Number(result.affected || 0);
+        const unchanged = Number(result.unchanged || 0);
+        if (affected <= 0 || affected + unchanged < notes.length) throw new Error('Batch operation affected no notes');
+        if (type === 'delete') {
+          const deletedKeys = new Set(ids);
+          notes.forEach(note => getNoteAliases(note).forEach(alias => deletedKeys.add(alias)));
+          notesItems = notesItems.filter(item => !getNoteAliases(item).some(alias => deletedKeys.has(alias)));
+          const [allHighlights, allQueued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
+          const matchesIdentity = item => getNoteAliases(item).some(alias => deletedKeys.has(alias));
+          await dbDeleteMany('highlights', allHighlights.filter(matchesIdentity).map(item => item.id));
+          await Promise.all(allQueued.filter(operation => {
+            const payload = operation.payload || {};
+            return [operation.entity_id, payload.id, payload.server_id, payload.client_id].filter(Boolean)
+              .map(String).some(alias => deletedKeys.has(alias));
+          }).map(operation => dbDelete('sync_queue', operation.id)));
+        }
+        const batchItems = Array.isArray(result.items) ? result.items : [];
+        const [allHighlights, allQueued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
+        for (const note of notes) {
+          const responseItem = batchItems.find(item => (
+            item.id === note.id || item.id === note.server_id || item.client_id === note.client_id ||
+            getNoteAliases(item).some(alias => getNoteAliases(note).includes(alias))
+          )) || batchItems[notes.indexOf(note)];
+          const aliases = new Set([...getNoteAliases(note), ...getNoteAliases(responseItem || {})]);
+          const matchesIdentity = item => getNoteAliases(item).some(alias => aliases.has(alias));
+          const matchingHighlights = allHighlights.filter(matchesIdentity);
+          const updated = { ...note, ...(responseItem || {}) };
+          if (type === 'trash') updated.deleted_at = result.deleted_at || updated.deleted_at || new Date().toISOString();
+          if (type === 'restore') updated.deleted_at = null;
+          if (type === 'tags') updated.tags = payload.action === 'add'
+            ? [...new Set([...(updated.tags || []), ...payload.tags])]
+            : (updated.tags || []).filter(tag => !payload.tags.includes(tag));
+          updated.id = matchingHighlights[0]?.id || note.id;
+          updated.server_id = responseItem?.id || note.server_id || note.id;
+          updated.client_id = responseItem?.client_id || note.client_id || note.id;
+          updated.synced = true;
+          if (type === 'delete') {
+            await dbDeleteMany('highlights', matchingHighlights.map(item => item.id));
+          } else {
+            await dbDeleteMany('highlights', matchingHighlights.filter(item => item.id !== updated.id).map(item => item.id));
+            await dbPut('highlights', updated);
+          }
+          await Promise.all(allQueued.filter(operation => {
+            const operationPayload = operation.payload || {};
+            return [operation.entity_id, operationPayload.id, operationPayload.server_id, operationPayload.client_id]
+              .filter(Boolean).map(String).some(alias => aliases.has(alias));
+          }).map(operation => dbDelete('sync_queue', operation.id)));
+        }
+      } catch (error) {
+        if (navigator.onLine) {
+          await loadNotesManagement();
+          if (!notes.every(note => note.book_id)) throw new Error('该历史记录需联网后操作');
+          throw error;
+        }
+        for (const note of notes) {
+          await applyLocalNoteOperation(note, `highlight.${type === 'delete' ? 'delete' : type}`, type === 'trash' ? { deleted_at: new Date().toISOString() } : payload);
+        }
       }
-    } catch (err) {
-      console.warn('Citation navigation failed:', err);
-      if (citation.href) {
-        try { await currentRendition.display(citation.href); } catch (_e) {}
+    } else {
+      if (!notes.every(note => note.book_id)) throw new Error('该历史记录需联网后操作');
+      for (const note of notes) {
+        await applyLocalNoteOperation(note, `highlight.${type === 'delete' ? 'delete' : type}`, type === 'trash' ? { deleted_at: new Date().toISOString() } : payload);
       }
-      showToast('已跳到引用章节，未能精确定位段落', 'warning');
+    }
+    notesSelection.clear();
+    await loadNotesManagement();
+    updateSyncBadge();
+    return true;
+  }
+
+  async function runSelectedNotesAction(type) {
+    const chosenNotes = selectedNotes();
+    const count = chosenNotes.length;
+    if (!count) return;
+    const isTag = type === 'tags';
+    const danger = type === 'trash' || type === 'delete';
+    const labels = { trash: `将 ${count} 条笔记移入回收站`, delete: `永久删除 ${count} 条笔记`, restore: `恢复 ${count} 条笔记`, tags: '为选中笔记添加标签' };
+    const value = await showNotesConfirm(labels[type], { tags: isTag, danger, confirmLabel: isTag ? '确认添加' : (type === 'trash' ? '确认移入' : (type === 'delete' ? '确认永久删除' : '确认')) });
+    if (value === null || (isTag && value.length === 0)) return;
+    try {
+      if (!chosenNotes.every(note => note.book_id) && !navigator.onLine) throw new Error('该历史记录需联网后操作');
+      if (type === 'trash') lastTrashedNotes = chosenNotes;
+      await applyNotesBatch(type, isTag ? { action: 'add', tags: value } : {});
+      if (type === 'trash') {
+        const undo = document.createElement('button'); undo.type = 'button'; undo.textContent = '撤销'; undo.className = 'btn btn-ghost btn-sm';
+        undo.onclick = async () => {
+          const notes = lastTrashedNotes;
+          notesSelection.clear();
+          notes.forEach(note => notesSelection.add(getStableNoteKey(note)));
+          try {
+            if (navigator.onLine) {
+              const response = await fetchWithTimeout(`${API_BASE}/api/notes/batch/restore`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ operation_id: uuid(), ids: notes.map(note => note.server_id || note.id) }),
+              });
+              if (!response.ok) throw new Error('restore failed');
+              const result = await response.json();
+              if (Number(result.affected || 0) < 1) throw new Error('restore affected no notes');
+            } else {
+              for (const note of notes) await applyLocalNoteOperation(note, 'highlight.restore', {});
+            }
+            notesSelection.clear();
+            await loadNotesManagement();
+            dom.toast.hidden = true;
+          } catch (_error) {
+            await loadNotesManagement();
+            showToast('撤销失败，请重试', 'error');
+          }
+        };
+        dom.toast.appendChild(undo); dom.toast.hidden = false;
+      }
+    } catch (error) {
+      await loadNotesManagement();
+      showToast('批量操作失败，请重试', 'error');
+    }
+  }
+
+  async function loadNotesManagement({ preserveDetail = false } = {}) {
+    const loadGeneration = ++notesLoadGeneration;
+    const requestQuery = { ...notesQuery, q: String(notesQuery.q || '').trim(), tags: [...(notesQuery.tags || [])] };
+    const isCurrentLoad = () => loadGeneration === notesLoadGeneration;
+    if (requestQuery.q.length === 1) {
+      const localNotes = filterAndSortLocalNotes(await dbGetAllSafe('highlights'), requestQuery);
+      if (!isCurrentLoad()) return;
+      notesItems = localNotes;
+      notesTotal = notesItems.length;
+      if (dom.notesDataStatus) dom.notesDataStatus.textContent = '至少输入 2 个字符';
+      notesHasMore = false;
+      renderNotesManagement(notesItems);
+      return;
+    }
+    try {
+      if (requestQuery.dataScope === 'pending') {
+        const pendingItems = await loadPendingNotes(requestQuery);
+        if (!isCurrentLoad()) return;
+        notesItems = pendingItems;
+        notesTotal = notesItems.length;
+        notesHasMore = false;
+      } else {
+        const result = await fetchServerNotes(requestQuery);
+        const [local, queued] = await Promise.all([dbGetAllSafe('highlights'), dbGetAllSafe('sync_queue')]);
+        if (!isCurrentLoad()) return;
+        notesItems = mergeServerAndLocalNotes(result.items || [], local, queued, requestQuery);
+        notesTotal = Number(result.total || 0);
+        notesHasMore = Boolean(result.has_more);
+        notesFacets = result.facets || null;
+        renderNotesFacets(notesFacets);
+        notesLoadError = null;
+        if (dom.notesDataStatus) dom.notesDataStatus.textContent = '在线数据';
+      }
+      notesLoaded = true;
+    } catch (error) {
+      if (!isCurrentLoad()) return;
+      notesLoadError = error;
+      if (!notesLoaded) {
+        const fallback = await loadOfflineNotes(requestQuery);
+        if (!isCurrentLoad()) return;
+        notesItems = fallback.items;
+        notesTotal = fallback.total;
+        notesHasMore = false;
+        if (dom.notesDataStatus) dom.notesDataStatus.textContent = '离线数据，可能不完整';
+        renderNotesFacets(fallback.facets);
+      } else if (dom.notesDataStatus) {
+        dom.notesDataStatus.textContent = '加载失败，已保留旧列表；请重试';
+      }
+    }
+    renderNotesManagement(notesItems);
+    if (managedNoteDraft && isManagedNoteDraftDirty()) {
+      renderManagedNoteDetail();
+    } else if (managedNoteDraft) {
+      const fresh = notesItems.find(item => item.id === managedNoteDraft.id);
+      if (fresh) openManagedNote(fresh);
+    }
+    if (preserveDetail && dom.notesLiveStatus) {
+      dom.notesLiveStatus.dataset.preserveDetail = 'true';
+      dom.notesLiveStatus.dataset.managedNoteKey = dom.notesLiveStatus.dataset.managedNoteKey || '';
+      dom.notesLiveStatus.dataset.draftState = dom.notesLiveStatus.dataset.draftState || 'clean';
+    }
+  }
+
+  function scheduleNotesManagementLoad() {
+    clearTimeout(notesSearchTimer);
+    notesSearchTimer = setTimeout(() => loadNotesManagement(), 300);
+  }
+
+  function updateNotesQuery(changes) {
+    notesQuery = { ...notesQuery, ...changes, offset: 0 };
+    if (dom.btnExportNotesMarkdown) {
+      const disabled = notesQuery.view === 'trash' || notesQuery.dataScope === 'pending';
+      dom.btnExportNotesMarkdown.disabled = disabled;
+      dom.btnExportNotesMarkdown.title = disabled ? '待同步和回收站视图不可导出' : '';
+    }
+    notesSelection.clear();
+    if (dom.notesSelectPage) dom.notesSelectPage.checked = false;
+    const oneCharacter = String(notesQuery.q || '').trim().length === 1;
+    if (oneCharacter && dom.notesDataStatus) dom.notesDataStatus.textContent = '至少输入 2 个字符';
+    scheduleNotesManagementLoad();
+  }
+
+  function renderOfflineNotesMarkdown(items) {
+    const lines = ['# E-书痕 笔记', '', '> 离线导出，可能不完整。', ''];
+    items.forEach(note => {
+      lines.push(`## 《${note.book_title || '未命名书籍'}》`);
+      if (note.chapter) lines.push(`### ${note.chapter}`);
+      lines.push(`- 划线：${note.highlight_text || ''}`);
+      if (note.note) lines.push(`- 感悟：${note.note}`);
+      if (note.tags?.length) lines.push(`- 标签：${note.tags.join('、')}`);
+      lines.push('');
+    });
+    return lines.join('\\n');
+  }
+
+  function startMarkdownDownload(content, filename) {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  async function exportNotesMarkdown() {
+    if (!dom.btnExportNotesMarkdown || dom.btnExportNotesMarkdown.disabled) return;
+    if (notesQuery.view === 'trash' || notesQuery.dataScope === 'pending') return;
+    const filename = `E-书痕-笔记-${new Date().toISOString().slice(0, 10)}.md`;
+    try {
+      if (!navigator.onLine) {
+        const result = await loadOfflineNotes(notesQuery);
+        startMarkdownDownload(renderOfflineNotesMarkdown(result.items), filename);
+        return;
+      }
+      const exportQuery = {
+        q: notesQuery.q,
+        bookId: notesQuery.bookId,
+        tags: notesQuery.tags,
+        noteKind: notesQuery.noteKind,
+        color: notesQuery.color,
+      };
+      const response = await fetchWithTimeout(API_BASE + '/api/notes/export.md?' + buildNotesQueryParams(exportQuery, { includePaging: false }));
+      if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+      const content = await response.text();
+      const disposition = response.headers.get('content-disposition') || '';
+      const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const plainFilename = disposition.match(/(?:^|;)\s*filename="?([^";]+)"?/i)?.[1];
+      const serverFilename = encodedFilename ? decodeURIComponent(encodedFilename) : plainFilename;
+      startMarkdownDownload(content, serverFilename || filename);
+    } catch (error) {
+      showToast('Markdown 导出失败，请重试', 'error');
     }
   }
 
@@ -4365,18 +5124,55 @@
     await dbPut('books', book);
 
     const localHighlights = await dbGetByIndex('highlights', 'by_book', bookId);
+    const queuedOperations = dbHasStore('sync_queue')
+      ? await dbGetByIndex('sync_queue', 'by_book', bookId)
+      : [];
+    const aliasMap = new Map();
+    localHighlights.forEach(highlight => getNoteAliases(highlight).forEach(alias => aliasMap.set(alias, highlight.id)));
+    const queuedAliases = new Set(queuedOperations.flatMap(operation => {
+      const payload = operation.payload || {};
+      return [operation.entity_id, payload.id, payload.client_id, payload.server_id]
+        .filter(Boolean).map(String);
+    }));
+    const serverAliases = new Set((state.highlights || []).flatMap(highlight => [highlight.id, highlight.client_id]
+      .filter(Boolean).map(String)));
     for (const highlight of localHighlights) {
-      await dbDelete('highlights', highlight.id);
+      const aliases = getNoteAliases(highlight);
+      if (!aliases.some(alias => queuedAliases.has(alias)) && !aliases.some(alias => serverAliases.has(alias))) {
+        await dbDelete('highlights', highlight.id);
+      }
     }
     for (const highlight of state.highlights || []) {
+      const aliases = [highlight.id, highlight.client_id].filter(Boolean).map(String);
+      const localId = aliases.map(alias => aliasMap.get(alias)).find(Boolean);
+      const existing = localId ? await dbGet('highlights', localId) : null;
+      if (existing && getNoteAliases(existing).some(alias => queuedAliases.has(alias))) continue;
       await dbPut('highlights', {
         ...highlight,
-        id: highlight.client_id || highlight.id,
+        id: existing?.id || highlight.client_id || highlight.id,
         server_id: highlight.id,
         book_id: bookId,
         synced: true,
         synced_at: highlight.updated_at || new Date().toISOString(),
       });
+    }
+    for (const operation of queuedOperations) {
+      const payload = operation.payload || {};
+      const aliases = [operation.entity_id, payload.id, payload.client_id, payload.server_id]
+        .filter(Boolean).map(String);
+      const localId = aliases.map(alias => aliasMap.get(alias)).find(Boolean);
+      const current = localId ? await dbGet('highlights', localId) : null;
+      if (!current) continue;
+      aliases.forEach(alias => aliasMap.set(alias, current.id));
+      if (operation.type.endsWith('.trash') || operation.type.endsWith('.delete')) {
+        current.deleted_at = current.deleted_at || new Date().toISOString();
+      } else if (operation.type.endsWith('.restore')) {
+        current.deleted_at = null;
+        Object.assign(current, payload, { synced: false });
+      } else if (payload) {
+        Object.assign(current, payload, { synced: false });
+      }
+      await dbPut('highlights', current);
     }
 
     if (dbHasStore('bookmarks')) {
@@ -4412,6 +5208,7 @@
       method: queued.length > 0 ? 'POST' : 'GET',
       headers: queued.length > 0 ? { 'Content-Type': 'application/json' } : undefined,
       body: queued.length > 0 ? JSON.stringify({
+        protocol_version: 2,
         operations: queued.map(item => ({
           op_id: item.op_id,
           type: item.type,
@@ -4471,277 +5268,6 @@
     }
   }
 
-  // ==================== CREATION WORKSPACE ====================
-  async function renderCreationWorkspace() {
-    await renderMaterials();
-    await renderDrafts();
-  }
-
-  async function getFilteredLocalMaterials() {
-    const bookFilter = dom.materialBookFilter.value.trim();
-    const tagFilter = dom.materialTagFilter.value.trim();
-    let materials = await dbGetAll('highlights');
-    if (bookFilter) {
-      materials = materials.filter(h => (h.book_title || '').includes(bookFilter));
-    }
-    if (tagFilter) {
-      materials = materials.filter(h => (h.tags || []).some(t => t.includes(tagFilter)));
-    }
-    materials.sort((a, b) => {
-      const bookCompare = (a.book_title || '').localeCompare(b.book_title || '', 'zh-CN');
-      if (bookCompare !== 0) return bookCompare;
-      return (a.progress_percent || 0) - (b.progress_percent || 0);
-    });
-    return materials;
-  }
-
-  async function renderMaterials() {
-    const materials = await getFilteredLocalMaterials();
-    dom.materialsList.innerHTML = '';
-
-    if (materials.length === 0) {
-      dom.materialsList.innerHTML = '<div class="empty-notes">还没有素材。先去阅读页划线并保存感悟。</div>';
-      updateSelectedMaterialCount();
-      return;
-    }
-
-    for (const h of materials) {
-      const item = document.createElement('div');
-      item.className = `material-card highlight-${h.color || 'yellow'}`;
-      if (selectedMaterialIds.has(h.id)) item.classList.add('selected');
-      item.dataset.highlightId = h.id;
-      const tags = (h.tags || []).map(t => `<span class="note-item-tag">${escapeHTML(t)}</span>`).join('');
-      item.innerHTML = `
-        <label class="material-check">
-          <input type="checkbox" ${selectedMaterialIds.has(h.id) ? 'checked' : ''}>
-          <span>${escapeHTML(h.book_title || '未命名书籍')}</span>
-        </label>
-        <div class="material-quote">${escapeHTML(h.highlight_text || '')}</div>
-        <div class="material-note ${h.note ? 'has-note' : ''}">${escapeHTML(h.note || '还没有感悟')}</div>
-        <div class="note-item-tags">${tags}</div>
-        <div class="note-item-meta">${h.progress_percent || 0}% · ${h.status || 'raw'} · ${h.synced ? '已同步' : '未同步'}</div>
-      `;
-
-      item.querySelector('input').addEventListener('change', (e) => {
-        if (e.target.checked) {
-          selectedMaterialIds.add(h.id);
-        } else {
-          selectedMaterialIds.delete(h.id);
-        }
-        updateSelectedMaterialCount();
-        item.classList.toggle('selected', e.target.checked);
-      });
-      item.addEventListener('click', (e) => {
-        if (e.target.tagName === 'INPUT') return;
-        openMaterialForReflection(h.id);
-      });
-      dom.materialsList.appendChild(item);
-    }
-    updateSelectedMaterialCount();
-  }
-
-  async function openMaterialForReflection(highlightId) {
-    const h = await dbGet('highlights', highlightId);
-    if (!h) return;
-    selectedMaterialId = highlightId;
-    dom.selectedMaterialDetail.innerHTML = `
-      <div class="selected-quote">
-        <div class="note-item-meta">${escapeHTML(h.book_title || '')} · ${escapeHTML(h.chapter || '')} · ${h.progress_percent || 0}%</div>
-        <blockquote>${escapeHTML(h.highlight_text || '')}</blockquote>
-      </div>
-    `;
-    dom.reflectionEditor.value = h.note || '';
-    dom.btnSaveReflection.disabled = false;
-    dom.btnDeleteReflection.disabled = !h.note;
-  }
-
-  function updateSelectedMaterialCount() {
-    dom.selectedMaterialCount.textContent = `${selectedMaterialIds.size} 条已选`;
-  }
-
-  function clearSelectedMaterial() {
-    selectedMaterialId = null;
-    dom.selectedMaterialDetail.innerHTML = '<p class="empty-hint">从左侧选择一条素材后编辑感悟；勾选多条素材后可生成内容。</p>';
-    dom.reflectionEditor.value = '';
-    dom.btnSaveReflection.disabled = true;
-    dom.btnDeleteReflection.disabled = true;
-  }
-
-  async function saveCurrentReflection() {
-    if (!selectedMaterialId) return;
-    const h = await dbGet('highlights', selectedMaterialId);
-    if (!h) return;
-    h.note = dom.reflectionEditor.value.trim();
-    h.status = h.note ? 'reflected' : 'raw';
-    h.updated_at = new Date().toISOString();
-    h.synced = false;
-    await dbPut('highlights', h);
-    const reflectionBook = await dbGet('books', h.book_id);
-    if (reflectionBook &&
-        (reflectionBook.server_book_id || reflectionBook.source === 'server')) {
-      await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
-    }
-    await renderMaterials();
-    dom.btnDeleteReflection.disabled = !h.note;
-    updateSyncBadge();
-    showToast('感悟已保存', 'success');
-  }
-
-  async function deleteCurrentReflection() {
-    if (!selectedMaterialId) return;
-    const h = await dbGet('highlights', selectedMaterialId);
-    if (!h || !h.note) return;
-    if (!confirm('确定删除这条感悟吗？划线和标签会保留。')) return;
-
-    h.note = '';
-    h.status = 'raw';
-    h.updated_at = new Date().toISOString();
-    h.synced = false;
-    await dbPut('highlights', h);
-    const reflectionBook = await dbGet('books', h.book_id);
-    if (reflectionBook &&
-        (reflectionBook.server_book_id || reflectionBook.source === 'server')) {
-      await queueReaderSync(h.book_id, 'highlight.upsert', h.id, h);
-    }
-    dom.reflectionEditor.value = '';
-    dom.btnDeleteReflection.disabled = true;
-    await renderMaterials();
-    await renderNotes();
-    updateSyncBadge();
-    showToast('感悟已删除', 'info');
-  }
-
-  async function generateDraft(target) {
-    if (selectedMaterialIds.size === 0) {
-      showToast('请先勾选素材', 'info');
-      return;
-    }
-
-    await syncToBackend();
-    const payload = {
-      target,
-      highlight_ids: Array.from(selectedMaterialIds),
-      topic: dom.draftTopic.value.trim(),
-      tone: '',
-      extra_instruction: dom.draftInstruction.value.trim(),
-    };
-
-    const button = target === 'video' ? dom.btnGenerateVideo : dom.btnGenerateArticle;
-    button.disabled = true;
-    button.textContent = '生成中...';
-    try {
-      const resp = await fetch(API_BASE + '/api/drafts/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) {
-        const error = await resp.json().catch(() => ({}));
-        throw new Error(error.detail || `Server responded with ${resp.status}`);
-      }
-      const draft = await resp.json();
-      await renderDrafts();
-      openDraftEditor(draft);
-      showToast('稿件已生成', 'success');
-    } catch (err) {
-      console.error('Draft generation failed:', err);
-      showToast('生成失败：' + err.message, 'error');
-    } finally {
-      button.disabled = false;
-      button.textContent = target === 'video' ? '生成视频号稿' : '生成公众号稿';
-    }
-  }
-
-  async function renderDrafts() {
-    try {
-      const resp = await fetch(API_BASE + '/api/drafts');
-      if (!resp.ok) return;
-      const data = await resp.json();
-      const drafts = data.drafts || [];
-      dom.draftList.innerHTML = '';
-      if (drafts.length === 0) {
-        dom.draftList.innerHTML = '<div class="empty-notes">还没有生成稿件</div>';
-        return;
-      }
-      for (const draft of drafts) {
-        const item = document.createElement('div');
-        item.className = 'draft-card';
-        item.innerHTML = `
-          <div class="draft-card-title">${escapeHTML(draft.title || '未命名稿件')}</div>
-          <div class="note-item-meta">${draft.target === 'video' ? '视频号' : '公众号'} · ${draft.exported_to_obsidian ? '已导出' : '未导出'}</div>
-        `;
-        item.addEventListener('click', () => openDraftEditor(draft));
-        dom.draftList.appendChild(item);
-      }
-    } catch (e) {
-      console.warn('Failed to fetch drafts:', e);
-    }
-  }
-
-  function openDraftEditor(draft) {
-    currentDraftId = draft.id;
-    dom.draftEditor.hidden = false;
-    dom.draftTitleEditor.value = draft.title || '';
-    dom.draftContentEditor.value = draft.content || '';
-  }
-
-  async function saveCurrentDraft() {
-    if (!currentDraftId) return;
-    const resp = await fetch(API_BASE + '/api/drafts/' + encodeURIComponent(currentDraftId), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: dom.draftTitleEditor.value.trim() || '未命名稿件',
-        content: dom.draftContentEditor.value,
-      }),
-    });
-    if (!resp.ok) {
-      showToast('草稿保存失败', 'error');
-      return;
-    }
-    const draft = await resp.json();
-    openDraftEditor(draft);
-    await renderDrafts();
-    showToast('草稿已保存', 'success');
-  }
-
-  async function exportCurrentDraft() {
-    if (!currentDraftId) return;
-    await exportToObsidian({ kind: 'draft', draft_id: currentDraftId });
-    await renderDrafts();
-  }
-
-  async function exportCurrentBook() {
-    const materials = await getFilteredLocalMaterials();
-    const selected = selectedMaterialId ? await dbGet('highlights', selectedMaterialId) : materials[0];
-    const bookTitle = selected ? selected.book_title : dom.materialBookFilter.value.trim();
-    if (!bookTitle) {
-      showToast('请先选择一本书或输入书名筛选', 'info');
-      return;
-    }
-    await syncToBackend();
-    await exportToObsidian({ kind: 'book', book_title: bookTitle });
-  }
-
-  async function exportToObsidian(payload) {
-    try {
-      const resp = await fetch(API_BASE + '/api/obsidian/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) {
-        const error = await resp.json().catch(() => ({}));
-        throw new Error(error.detail || `Server responded with ${resp.status}`);
-      }
-      const data = await resp.json();
-      showToast('已导出到 ' + data.path, 'success');
-    } catch (err) {
-      console.error('Obsidian export failed:', err);
-      showToast('导出失败：' + err.message, 'error');
-    }
-  }
-
   // ==================== PWA ====================
   function registerSW() {
     if (!('serviceWorker' in navigator)) return;
@@ -4755,12 +5281,12 @@
         return;
       }
       setOperationStatus({
-        message: 'Marginalia 已更新',
+        message: 'E-书痕已更新',
         detail: '当前操作不会被打断，请稍后刷新页面使用新版本',
       });
     });
 
-    navigator.serviceWorker.register('sw.js')
+    navigator.serviceWorker.register('sw.js?v=40')
       .then((reg) => {
         console.log('Service Worker registered:', reg.scope);
         reg.update().catch(() => {});
@@ -4772,33 +5298,123 @@
 
   // ==================== EVENT BINDINGS ====================
   function bindEvents() {
-    [dom.readerToolbar, dom.readerFooter, dom.readerToolPanel, dom.appNav].forEach((element) => {
+    [dom.btnRevealReaderChrome, dom.readerToolbar, dom.readerToolPanel].forEach((element) => {
+      if (!element) return;
+      element.addEventListener('pointerenter', openReaderChromeOnHover);
+      element.addEventListener('pointerleave', scheduleReaderChromeHoverClose);
+      element.addEventListener('focusin', openReaderChromeOnHover);
+      element.addEventListener('focusout', scheduleReaderChromeHoverClose);
+    });
+
+    [dom.readerToolbar, dom.readerToolPanel].forEach((element) => {
       if (!element) return;
       element.addEventListener('pointerdown', () => {
         if (!dom.readerView.classList.contains('active')) return;
         setReaderChromeVisible(true);
         cancelReaderChromeHide();
+        cancelReaderChromeHoverClose();
       });
       element.addEventListener('click', () => {
-        setTimeout(() => scheduleReaderChromeHide(), 0);
+        if (isMobileLayout()) setTimeout(() => scheduleReaderChromeHide(), 0);
       });
-      element.addEventListener('focusin', () => cancelReaderChromeHide());
-      element.addEventListener('focusout', () => setTimeout(() => scheduleReaderChromeHide(), 0));
     });
 
-    dom.btnNavLibrary.addEventListener('click', showLibrary);
-    dom.btnNavRead.addEventListener('click', () => {
-      if (currentBookMeta && currentRendition) {
-        showReader();
-      } else {
-        showLibrary();
-        showToast('请先从书库打开一本书', 'info');
+    dom.btnLibraryCreate.addEventListener('click', () => requestNotesNavigation(showCreation));
+    dom.btnNotesBack.addEventListener('click', () => requestNotesNavigation(showLibrary));
+    const notesFilterBindings = [
+      [dom.notesBookFilter, 'bookId'], [dom.notesTagFilter, 'tags'],
+      [dom.notesKindFilter, 'noteKind'], [dom.notesColorFilter, 'color'],
+      [dom.notesSort, 'sort'],
+    ];
+    notesFilterBindings.forEach(([element, key]) => element?.addEventListener('change', () => {
+      updateNotesQuery({ [key]: key === 'tags' ? (element.value ? [element.value] : []) : element.value });
+    }));
+    dom.notesSearch?.addEventListener('input', () => {
+      updateNotesQuery({ q: dom.notesSearch.value });
+      if (dom.notesSearch.value.trim().length === 1) loadNotesManagement();
+    });
+    dom.notesPendingOnly?.addEventListener('change', () => updateNotesQuery({ dataScope: dom.notesPendingOnly.value }));
+    dom.notesSelectPage?.addEventListener('change', () => {
+      const pageKeys = notesItems.map(getStableNoteKey).filter(Boolean);
+      pageKeys.forEach(key => dom.notesSelectPage.checked ? notesSelection.add(key) : notesSelection.delete(key));
+      updateNotesSelectionUi();
+    });
+    dom.btnBatchAddTag?.addEventListener('click', () => runSelectedNotesAction('tags'));
+    dom.btnBatchRemoveTag?.addEventListener('click', async () => {
+      const tags = await showNotesConfirm('移除选中笔记中的标签', { tags: true, confirmLabel: '确认移除' });
+      if (tags?.length) {
+        try { await applyNotesBatch('tags', { action: 'remove', tags }); } catch (_error) { showToast('批量操作失败，请重试', 'error'); }
       }
     });
-    dom.btnNavCreate.addEventListener('click', showCreation);
-    dom.btnLibraryCreate.addEventListener('click', showCreation);
+    dom.btnBatchTrash?.addEventListener('click', () => runSelectedNotesAction('trash'));
+    dom.btnBatchRestore?.addEventListener('click', () => runSelectedNotesAction('restore'));
+    dom.btnBatchDelete?.addEventListener('click', () => runSelectedNotesAction('delete'));
+    dom.btnEmptyTrash?.addEventListener('click', async () => {
+      const trash = [];
+      if (navigator.onLine) {
+        let offset = 0;
+        while (true) {
+          const result = await fetchServerNotes({ ...notesQuery, view: 'trash', offset, limit: 100 });
+          trash.push(...(result.items || []));
+          if (!result.has_more) break;
+          offset += 100;
+        }
+      } else {
+        trash.push(...(await loadOfflineNotes({ ...notesQuery, view: 'trash' })).items);
+      }
+      if (!trash.length) return;
+      const confirmed = await showNotesConfirm(`永久删除回收站中的 ${trash.length} 条笔记`, { danger: true, confirmLabel: '确认清空' });
+      if (confirmed !== null) {
+        notesItems = trash;
+        for (let index = 0; index < trash.length; index += 100) {
+          notesSelection.clear(); trash.slice(index, index + 100).forEach(note => notesSelection.add(getStableNoteKey(note)));
+          try { await applyNotesBatch('delete'); } catch (_error) { showToast('清空回收站失败，已保留已完成批次', 'error'); break; }
+        }
+      }
+    });
+    dom.btnExportNotesMarkdown?.addEventListener('click', exportNotesMarkdown);
+    if (dom.btnExportNotesMarkdown) {
+      dom.btnExportNotesMarkdown.disabled = notesQuery.view === 'trash' || notesQuery.dataScope === 'pending';
+    }
+    dom.btnNotesTrash?.addEventListener('click', () => requestNotesNavigation(() => updateNotesQuery({ view: notesQuery.view === 'trash' ? 'active' : 'trash' })));
+    dom.btnNotesTrash?.addEventListener('click', () => { if (dom.btnNotesTrash) dom.btnNotesTrash.setAttribute('aria-pressed', String(notesQuery.view === 'trash')); });
+    dom.btnClearNoteFilters?.addEventListener('click', () => { notesQuery = createDefaultNotesQuery(); loadNotesManagement(); });
+    dom.notesPrevious?.addEventListener('click', () => { notesQuery.offset = Math.max(0, notesQuery.offset - notesQuery.limit); loadNotesManagement(); });
+    dom.notesNext?.addEventListener('click', () => { notesQuery.offset += notesQuery.limit; loadNotesManagement(); });
+    document.addEventListener('keydown', (event) => {
+      if (!managedNoteDraft || !dom.notesDetailPane?.classList.contains('is-open')) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        requestNotesNavigation(() => closeManagedNote());
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...dom.notesDetailPane.querySelectorAll('button, input, textarea, select')]
+        .filter(element => !element.disabled && !element.hidden);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    window.addEventListener('hashchange', () => requestNotesNavigation(applyCurrentRoute));
+    window.addEventListener('popstate', () => requestNotesNavigation(applyCurrentRoute));
+    window.addEventListener('beforeunload', (event) => {
+      if (isManagedNoteDraftDirty()) { event.preventDefault(); event.returnValue = ''; }
+    });
 
     // File import
+    const importTrigger = dom.fileInput.closest('.import-btn');
+    importTrigger?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      dom.fileInput.click();
+    });
     dom.fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) handleFileImport(file);
@@ -4806,16 +5422,20 @@
     });
 
     // Back to library
-    dom.btnBack.addEventListener('click', showLibrary);
+    dom.btnBack.addEventListener('click', () => requestNotesNavigation(showLibrary));
 
-    // AI book Q&A
+    // Reader tools
     dom.btnReaderTools.addEventListener('click', toggleReaderTools);
     dom.btnRevealReaderChrome.addEventListener('click', () => revealReaderChromeTemporarily());
-    dom.btnToggleAi.addEventListener('click', () => toggleAiPanel());
-    dom.btnCloseAi.addEventListener('click', () => toggleAiPanel(false));
-    dom.aiForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      askBookQuestion(dom.aiQuestionInput.value);
+    dom.btnToggleNavigator.addEventListener('click', toggleReaderNavigator);
+    dom.btnCloseNavigator.addEventListener('click', () => setReaderNavigatorOpen(false, { restoreFocus: true }));
+    dom.btnRevealNavigator.addEventListener('click', () => setReaderNavigatorOpen(true));
+    [dom.btnRevealNavigator, dom.readerNavigator].forEach((element) => {
+      if (!element) return;
+      element.addEventListener('pointerenter', openReaderNavigatorOnHover);
+      element.addEventListener('pointerleave', scheduleReaderNavigatorHoverClose);
+      element.addEventListener('focusin', openReaderNavigatorOnHover);
+      element.addEventListener('focusout', scheduleReaderNavigatorHoverClose);
     });
     dom.btnOperationClose.addEventListener('click', () => hideOperationStatus());
     dom.btnOperationRetry.addEventListener('click', async () => {
@@ -4823,57 +5443,47 @@
       const book = await dbGet('books', operationBookId);
       if (book) await retryBookUpload(book);
     });
-    dom.aiPanel.querySelectorAll('[data-ai-question]').forEach(btn => {
-      btn.addEventListener('click', () => askBookQuestion(btn.dataset.aiQuestion || ''));
-    });
-    dom.aiConversationSelect.addEventListener('change', async () => {
-      currentAiConversationId = dom.aiConversationSelect.value || null;
-      await loadAiMessages();
-      renderAiConversationOptions();
-    });
-    dom.btnNewAiConversation.addEventListener('click', () => createAiConversation());
-    dom.btnDeleteAiConversation.addEventListener('click', deleteCurrentAiConversation);
-    dom.btnRetryAiIndex.addEventListener('click', async () => {
-      if (!currentBookMeta) return;
-      if (!currentBookMeta.knowledge_book_id) {
-        if (!currentBookMeta.file_blob && currentBookMeta.filename) {
-          await recoverMissingKnowledgeBook(currentBookMeta, { promptForFile: true });
-          return;
-        }
-        await ensureKnowledgeBook(currentBookMeta);
-        return;
-      }
-      try {
-        const resp = await fetch(
-          API_BASE + '/api/knowledge/books/' +
-          encodeURIComponent(currentBookMeta.knowledge_book_id) + '/reindex',
-          { method: 'POST' }
-        );
-        if (resp.status === 404) {
-          await recoverMissingKnowledgeBook(currentBookMeta, {
-            promptForFile: !currentBookMeta.file_blob,
-          });
-          return;
-        }
-        if (!resp.ok) {
-          showToast('索引重试失败', 'error');
-          return;
-        }
-        currentBookMeta.knowledge_status = 'pending';
-        await dbPut('books', currentBookMeta);
-        setAiIndexState('pending');
-        pollKnowledgeStatus(currentBookMeta);
-      } catch (err) {
-        console.error('Knowledge reindex failed:', err);
-        showToast('索引重试失败：无法连接服务器', 'error');
-      }
-    });
 
     // Toggle notes panel
     dom.btnAddBookmark.addEventListener('click', addBookmark);
     dom.btnToggleNotes.addEventListener('click', () => toggleNotesPanel());
+    dom.btnRevealNotes.addEventListener('click', () => toggleNotesPanel(true));
+    [dom.btnRevealNotes, dom.notesPanel].forEach((element) => {
+      if (!element) return;
+      element.addEventListener('pointerenter', openReaderNotesOnHover);
+      element.addEventListener('pointerleave', scheduleReaderNotesHoverClose);
+      element.addEventListener('focusin', openReaderNotesOnHover);
+      element.addEventListener('focusout', scheduleReaderNotesHoverClose);
+    });
     dom.btnToggleReaderAutoHide.addEventListener('click', () => {
       setReaderChromeAutoHideEnabled(!readerChromeAutoHideEnabled);
+    });
+    dom.readerFontFamily.addEventListener('change', () => {
+      setReaderFontFamily(dom.readerFontFamily.value);
+    });
+    dom.readerFontSize.addEventListener('input', () => {
+      setReaderFontSize(dom.readerFontSize.value);
+    });
+    dom.btnReaderFontDecrease.addEventListener('click', () => {
+      setReaderFontSize(currentFontSize - FONT_SIZE_STEP);
+    });
+    dom.btnReaderFontReset.addEventListener('click', () => {
+      setReaderFontSize(100);
+    });
+    dom.btnReaderFontIncrease.addEventListener('click', () => {
+      setReaderFontSize(currentFontSize + FONT_SIZE_STEP);
+    });
+    dom.readerLineHeight.addEventListener('input', () => {
+      setReaderLineHeight(dom.readerLineHeight.value);
+    });
+    dom.btnReaderLineHeightReset.addEventListener('click', () => {
+      setReaderLineHeight(READER_LINE_HEIGHT_DEFAULT);
+    });
+    dom.readerParagraphSpacing.addEventListener('input', () => {
+      setReaderParagraphSpacing(dom.readerParagraphSpacing.value);
+    });
+    dom.btnReaderParagraphSpacingReset.addEventListener('click', () => {
+      setReaderParagraphSpacing(READER_PARAGRAPH_SPACING_DEFAULT);
     });
     dom.btnCloseNotesPanel.addEventListener('click', () => toggleNotesPanel(false));
     dom.readerPanelBackdrop.addEventListener('click', () => closeMobileReaderPanels({ restoreFocus: true }));
@@ -4893,36 +5503,8 @@
     dom.btnSearchClose.addEventListener('click', toggleSearchPanel);
     dom.btnCloseSearchPanel.addEventListener('click', () => setSearchPanelOpen(false));
 
-    // Progress slider
-    dom.progressSlider.addEventListener('input', (e) => {
-      cancelReaderChromeHide();
-      const pct = parseInt(dom.progressSlider.value);
-      dom.progressText.textContent = pct + '%';
-      if (!e.isTrusted && currentRendition) {
-        jumpToProgress(pct / 100);
-      }
-    });
-    dom.progressSlider.addEventListener('change', () => {
-      if (!currentRendition) return;
-      const pct = parseInt(dom.progressSlider.value) / 100;
-      jumpToProgress(pct);
-      scheduleReaderChromeHide();
-    });
-
     // Sync button
     dom.btnSync.addEventListener('click', syncToBackend);
-
-    // Creation workspace
-    dom.btnRefreshMaterials.addEventListener('click', renderCreationWorkspace);
-    dom.materialBookFilter.addEventListener('input', renderMaterials);
-    dom.materialTagFilter.addEventListener('input', renderMaterials);
-    dom.btnSaveReflection.addEventListener('click', saveCurrentReflection);
-    dom.btnDeleteReflection.addEventListener('click', deleteCurrentReflection);
-    dom.btnGenerateVideo.addEventListener('click', () => generateDraft('video'));
-    dom.btnGenerateArticle.addEventListener('click', () => generateDraft('article'));
-    dom.btnSaveDraft.addEventListener('click', saveCurrentDraft);
-    dom.btnExportDraft.addEventListener('click', exportCurrentDraft);
-    dom.btnExportBook.addEventListener('click', exportCurrentBook);
 
     // Highlight color buttons
     dom.selectionToolbar.querySelectorAll('.btn-highlight').forEach(btn => {
@@ -4989,18 +5571,6 @@
       }
     });
 
-    // Page navigation buttons
-    dom.btnNavPrev.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      navigatePage('prev', 'button');
-    });
-    dom.btnNavNext.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      navigatePage('next', 'button');
-    });
-
     // Online/offline
     window.addEventListener('online', async () => {
       showToast('网络已恢复，正在同步服务器书库', 'success');
@@ -5017,10 +5587,15 @@
     mobileLayoutMedia.addEventListener('change', () => {
       dom.notesPanel.classList.remove('open');
       document.body.classList.remove('reader-panel-open');
-      resetReaderChrome();
+      cancelReaderChromeHoverClose();
+      cancelReaderNavigatorHoverClose();
+      cancelReaderNotesHoverClose();
+      setReaderChromeVisible(isMobileLayout());
+      setReaderNavigatorOpen(false);
+      toggleNotesPanel(false);
       syncReaderPanelBackdrop();
       refreshReaderLayout();
-      if (dom.readerView.classList.contains('active')) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
+      if (dom.readerView.classList.contains('active') && isMobileLayout()) scheduleReaderChromeHide(READER_CHROME_INITIAL_HIDE_MS);
     });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
@@ -5044,16 +5619,21 @@
     }
 
     loadReaderChromeAutoHidePreference();
+    loadReaderTypographyPreference();
+    setReaderNavigatorOpen(false);
     observeReaderIframes();
     bindEvents();
     syncReaderToolStates();
     registerSW();
-    await renderLibrary();
+    if (!window.location.hash) {
+      history.replaceState({}, '', '#/');
+    }
+    await applyCurrentRoute();
     await updateSyncBadge();
     refreshServerLibrary().catch(() => {});
     migrateLocalBooksToServer().catch(() => {});
 
-    console.log('Marginalia ready 📖');
+    console.log('E-BookTrace ready 📖');
   }
 
   // Start the app

@@ -52,5 +52,5 @@ if ($DisableSleepOnAC) {
     }
 }
 
-Write-Output "Installed Marginalia startup and daily $BackupAt backup tasks."
+Write-Output "Installed E-BookTrace startup and daily $BackupAt backup tasks (machine task names remain Marginalia for compatibility)."
 Write-Output "Also enable 'Start Docker Desktop when you sign in' in Docker Desktop settings."

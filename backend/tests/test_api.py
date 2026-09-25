@@ -72,7 +72,8 @@ def client():
 
 
 class TestHealth:
-    def test_health_check(self, client):
+    def test_public_api_title_and_stable_health_identifier(self, client):
+        assert app.title == "E-BookTrace API"
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
@@ -529,6 +530,7 @@ class TestServerLibraryAPI:
         assert [item["id"] for item in state["bookmarks"]] == ["bookmark-1"]
         assert state["highlights"][0]["client_id"] == "highlight-1"
         assert state["highlights"][0]["note"] == "server note"
+        assert state["highlights"][0]["deleted_at"] is None
 
     def test_delete_removes_file_and_reader_state(self, client):
         async def no_index(_book_id):

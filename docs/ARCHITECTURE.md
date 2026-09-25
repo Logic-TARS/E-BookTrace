@@ -1,8 +1,8 @@
-# Marginalia Architecture
+# E-BookTrace Architecture
 
 ## Overview
 
-Marginalia is an end-to-end local reading workflow: EPUB highlights -> backend notes library -> creation outputs.
+E-书痕 (E-BookTrace) is an end-to-end local reading workflow: EPUB highlights -> backend notes library -> creation outputs. Legacy `marginalia` storage, service, and cache identifiers remain stable for compatibility.
 
 ```text
 ┌─────────────────┐     ┌──────────────────┐
@@ -29,7 +29,7 @@ Marginalia is an end-to-end local reading workflow: EPUB highlights -> backend n
 
 - **Stack**: Vanilla HTML/JS/CSS + epub.js
 - **Storage**: IndexedDB (`books`, `highlights`, `bookmarks`, `sync_queue`) as an offline cache
-- **Key features**: server-first EPUB import, CFI-based highlighting, inline notes, tags, search, bookmarks, AI Q&A, cross-device sync
+- **Key features**: server-first EPUB import, CFI-based highlighting, inline notes, tags, search, bookmarks, 阅读排版面板、目录与书签、`/book-chat/` 入口, cross-device sync
 - **Offline**: Service worker caches the app shell and server EPUB responses; mutations queue locally until the server is reachable
 
 ### 2. Backend API (`backend/`)

@@ -8,7 +8,7 @@ export default defineConfig({
     viewport: { width: 1000, height: 700 },
   },
   webServer: {
-    command: '"..\\.venv\\Scripts\\python.exe" -m http.server 8099',
+    command: 'python -m http.server 8099',
     port: 8099,
     reuseExistingServer: true,
     cwd: '.',

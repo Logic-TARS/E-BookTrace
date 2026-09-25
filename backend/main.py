@@ -1,4 +1,4 @@
-"""Marginalia API — FastAPI application."""
+"""E-BookTrace API — FastAPI application."""
 
 from __future__ import annotations
 
@@ -6,18 +6,24 @@ import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional
+from urllib.parse import quote
 
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from config import settings
 from database import (
+    NoteBatchConflict,
+    batch_delete_notes,
+    batch_restore_notes,
+    batch_trash_notes,
+    batch_update_note_tags,
     init_db,
     upsert_highlights,
     get_all_highlights,
@@ -31,6 +37,8 @@ from database import (
     get_draft,
     update_draft,
     delete_draft,
+    list_notes,
+    list_notes_for_export,
 )
 from models import (
     BookSyncRequest,
@@ -41,6 +49,9 @@ from models import (
     DraftUpdate,
     HighlightDelete,
     HighlightUpdate,
+    NoteBatchIdsRequest,
+    NoteBatchResult,
+    NoteBatchTagsRequest,
     ObsidianExportRequest,
     QAStreamRequest,
     SyncRequest,
@@ -50,6 +61,7 @@ from models import (
 )
 from books_api import serve_book
 from database import export_all_to_json
+from notes import notes_markdown_filename, render_notes_markdown
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("marginalia")
@@ -75,8 +87,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Marginalia API",
-    description="E-book highlights → Notes Library → Creation Agent",
+    title="E-BookTrace API",
+    description="E-BookTrace highlights → Notes Library → Creation Agent",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -155,6 +167,75 @@ async def list_highlights(
         book_title=book_title, limit=limit, offset=offset
     )
     return {"highlights": highlights, "count": len(highlights)}
+
+
+@app.get("/api/notes")
+async def list_notes_endpoint(
+    q: Optional[str] = None,
+    book_id: Optional[str] = None,
+    tag: list[str] = Query(default=[]),
+    note_kind: Literal["all", "reflected", "highlight_only"] = "all",
+    color: Optional[Literal["yellow", "green", "blue", "pink"]] = None,
+    view: Literal["active", "trash"] = "active",
+    sort: Literal["updated_desc", "created_desc", "position", "book"] = "updated_desc",
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    normalized_query = q.strip() if q else None
+    if normalized_query and len(normalized_query) < 2:
+        raise HTTPException(status_code=422, detail="搜索关键词至少需要 2 个字符")
+    result = await list_notes(
+        q=normalized_query,
+        book_id=book_id,
+        tags=tag,
+        note_kind=note_kind,
+        color=color,
+        view=view,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    for item in result["items"]:
+        if "cfi" in item:
+            item["cfi_range"] = item.pop("cfi")
+    return result
+
+
+async def _run_note_batch(operation, request) -> NoteBatchResult:
+    try:
+        result = await operation(**request.model_dump())
+    except NoteBatchConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    await _export_notes()
+    return NoteBatchResult(**result)
+
+
+@app.post("/api/notes/batch/tags", response_model=NoteBatchResult)
+async def batch_note_tags_endpoint(
+    request: NoteBatchTagsRequest,
+) -> NoteBatchResult:
+    return await _run_note_batch(batch_update_note_tags, request)
+
+
+@app.post("/api/notes/batch/trash", response_model=NoteBatchResult)
+async def batch_trash_notes_endpoint(
+    request: NoteBatchIdsRequest,
+) -> NoteBatchResult:
+    return await _run_note_batch(batch_trash_notes, request)
+
+
+@app.post("/api/notes/batch/restore", response_model=NoteBatchResult)
+async def batch_restore_notes_endpoint(
+    request: NoteBatchIdsRequest,
+) -> NoteBatchResult:
+    return await _run_note_batch(batch_restore_notes, request)
+
+
+@app.post("/api/notes/batch/delete", response_model=NoteBatchResult)
+async def batch_delete_notes_endpoint(
+    request: NoteBatchIdsRequest,
+) -> NoteBatchResult:
+    return await _run_note_batch(batch_delete_notes, request)
 
 
 @app.get("/api/materials")
@@ -539,11 +620,16 @@ async def get_server_book_sync(book_id: str):
 
 @app.post("/api/books/{book_id}/sync")
 async def sync_server_book(book_id: str, request: BookSyncRequest):
-    from library import sync_book_state
+    from library import ReaderSyncConflict, sync_book_state
 
-    return await sync_book_state(
-        book_id, [operation.model_dump() for operation in request.operations]
-    )
+    try:
+        return await sync_book_state(
+            book_id,
+            [operation.model_dump() for operation in request.operations],
+            protocol_version=request.protocol_version,
+        )
+    except ReaderSyncConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.delete("/api/books/{book_id}")
@@ -562,6 +648,45 @@ async def get_book(filename: str):
 
 
 # ── Notes export ──────────────────────────────────────
+@app.get("/api/notes/export.md")
+async def export_notes_markdown(
+    request: Request,
+    q: Optional[str] = None,
+    book_id: Optional[str] = None,
+    tag: list[str] = Query(default=[]),
+    note_kind: Literal["all", "reflected", "highlight_only"] = "all",
+    color: Optional[Literal["yellow", "green", "blue", "pink"]] = None,
+):
+    allowed_parameters = {"q", "book_id", "tag", "note_kind", "color"}
+    if any(key not in allowed_parameters for key in request.query_params):
+        raise HTTPException(status_code=422, detail="不支持的导出筛选参数")
+
+    normalized_query = q.strip() if q else None
+    if normalized_query and len(normalized_query) < 2:
+        raise HTTPException(status_code=422, detail="搜索关键词至少需要 2 个字符")
+    notes = await list_notes_for_export(
+        q=normalized_query,
+        book_id=book_id,
+        tags=tag,
+        note_kind=note_kind,
+        color=color,
+    )
+    if not notes:
+        raise HTTPException(status_code=422, detail="当前筛选条件下没有可导出的笔记")
+
+    filename = notes_markdown_filename()
+    return Response(
+        content=render_notes_markdown(notes, offline=False),
+        media_type="text/markdown; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=E-BookTrace-notes.md; "
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        },
+    )
+
+
 @app.get("/api/notes/export")
 async def export_notes():
     """Export all highlights as a standard JSON file."""

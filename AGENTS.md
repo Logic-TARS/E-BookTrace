@@ -2,10 +2,10 @@
 
 ## Project Structure & Module Organization
 
-Marginalia is a small FastAPI plus static PWA project.
+E-书痕 (E-BookTrace) is a small FastAPI plus static PWA project. Legacy `marginalia` storage, service, script, and path identifiers remain for compatibility.
 
 - `backend/` contains the Python API, persistence, book Q&A, Obsidian export, and script agent logic. `main.py` defines routes, `database.py` handles SQLite access, `models.py` owns Pydantic schemas, and `config.py` reads environment settings.
-- `frontend/` contains the browser reader PWA: `index.html`, `style.css`, `app.js`, `sw.js`, and `manifest.json`.
+- `frontend/` contains the browser reader PWA: `index.html`, `style.css`, `app.js`, `sw.js`, and `manifest.json`. IndexedDB is v6; the notes API supports parameterized search/filter/facets/pagination, trash, batch actions, and `/api/notes/export.md`.
 - `docs/` stores architecture notes.
 - `scripts/` contains utility scripts.
 - Runtime data belongs under `backend/data/` and is ignored by Git.
@@ -24,7 +24,7 @@ Python uses 4-space indentation, type hints where useful, async route handlers, 
 
 ## Testing Guidelines
 
-No automated test suite is currently configured. For backend changes, add focused `pytest` tests under a future `backend/tests/` directory and name files `test_*.py`. For frontend changes, manually verify EPUB import, highlighting, note editing, sync badge behavior, and API sync against a running backend.
+No automated test suite is currently configured. For backend changes, add focused `pytest` tests under a future `backend/tests/` directory and name files `test_*.py`. For frontend changes, run the focused Playwright notes/mobile/server-sync specs and the full frontend suite; manually verify EPUB import, highlighting, note editing, sync badge behavior, responsive detail focus/Escape behavior, Markdown export, and API sync against a running backend.
 
 ## Commit & Pull Request Guidelines
 
