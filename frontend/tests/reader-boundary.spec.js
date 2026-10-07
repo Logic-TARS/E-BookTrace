@@ -15,6 +15,8 @@ const JUMP_DELAY = 1000; // ms for progress slider jump to settle
  */
 async function openFixture(page) {
   await page.goto('/index.html');
+  await page.evaluate(() => localStorage.setItem('marginalia.readerFlow', 'paginated'));
+  await page.reload();
   await page.setInputFiles('#file-input', FIXTURE);
   await expect.poll(async () => page.locator('#toolbar-book-title').textContent(), { timeout: 15_000 }).toMatch(/multichapter/i);
   await expect(page.locator('#toolbar-chapter')).not.toHaveText(/加载中|选择一本书开始阅读/, { timeout: 15_000 });

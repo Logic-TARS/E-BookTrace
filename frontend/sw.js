@@ -3,14 +3,14 @@
  * Network-first for app shell HTML/JS/CSS; cache-first for stable EPUB files;
  * network-only for API calls (503 when offline); cache-first for other static assets.
  */
-const APP_SHELL_CACHE_NAME = 'marginalia-shell-v45';
+const APP_SHELL_CACHE_NAME = 'marginalia-shell-v48';
 const EPUB_CACHE_NAME = 'marginalia-epubs-v1';
 
 const APP_SHELL = [
   '.',
   'index.html',
-  'app.js?v=42',
-  'style.css?v=45',
+  'app.js?v=44',
+  'style.css?v=47',
   'manifest.json',
   'jszip.min.js',
   'epub.min.js',

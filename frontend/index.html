@@ -7,7 +7,7 @@
   <meta name="description" content="E-书痕（E-BookTrace）- 阅读划线、读书感悟与笔记管理">
   <link rel="manifest" href="manifest.json">
   <title>E-书痕 · E-BookTrace</title>
-  <link rel="stylesheet" href="style.css?v=45">
+  <link rel="stylesheet" href="style.css?v=47">
   <script src="jszip.min.js"></script>
   <script src="epub.min.js"></script>
 </head>
@@ -106,6 +106,13 @@
             <span>仅调整正文显示，不改变书籍内容</span>
           </div>
           <div class="reader-typography-fields">
+            <label class="reader-flow-field" for="reader-flow">
+              <span>阅读模式</span>
+              <select id="reader-flow">
+                <option value="paginated">翻页</option>
+                <option value="scrolled">滚动</option>
+              </select>
+            </label>
             <label class="reader-font-family-field" for="reader-font-family">
               <span>阅读字体</span>
               <select id="reader-font-family">
@@ -420,6 +427,6 @@
     <div id="toast" class="toast" hidden></div>
   </div>
 
-  <script src="app.js?v=42"></script>
+  <script src="app.js?v=44"></script>
 </body>
 </html>

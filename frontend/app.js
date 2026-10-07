@@ -43,11 +43,17 @@
   let locationsReadyBook = null;
   let lastPageInfo = null;
   let progressJumpToken = 0;
-  let layoutRefreshToken = 0;
+  let readerOperationToken = 0;
+  let activeReaderOperationToken = 0;
   let isLayoutRefreshing = false;
+  let stableReaderLocation = null;
+  let layoutRefreshTimer = null;
+  let pendingLayoutAnchor = '';
+  let pendingLayoutRefresh = false;
   let pageNavigationInProgress = false;
-  let pageNavigationToken = 0;
   const PAGE_NAVIGATION_COOLDOWN = 180;
+  const READER_LAYOUT_DEBOUNCE_MS = 120;
+  const CONTINUOUS_SETTLE_MS = 180;
   let wheelGestureTimer = null;
   let wheelAccumulatedDelta = 0;
   let wheelGestureLocked = false;
@@ -60,6 +66,9 @@
   const FONT_SIZE_MIN = 60;
   const FONT_SIZE_MAX = 200;
   const READER_TYPOGRAPHY_KEY = 'marginalia.readerTypography';
+  const READER_FLOW_KEY = 'marginalia.readerFlow';
+  const READER_FLOWS = new Set(['paginated', 'scrolled']);
+  const SCROLLED_PROGRESS_DEBOUNCE_MS = 700;
   const READER_FONT_FAMILIES = new Set(['original', 'serif', 'sans', 'kai']);
   const READER_FONT_STACKS = {
     serif: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, Georgia, serif',
@@ -77,6 +86,11 @@
   let currentReaderFontFamily = 'original';
   let currentReaderLineHeight = READER_LINE_HEIGHT_DEFAULT;
   let currentReaderParagraphSpacing = READER_PARAGRAPH_SPACING_DEFAULT;
+  let currentReaderFlow = 'paginated';
+  let renditionGeneration = 0;
+  let readerFlowChangeToken = 0;
+  let scrolledProgressTimer = null;
+  let pendingScrolledLocation = null;
   let fontZoomAccumulatedDelta = 0;
   let fontZoomResetTimer = null;
   let searchResultsList = [];
@@ -165,6 +179,7 @@
     btnToggleNotes: $('#btn-toggle-notes'),
     btnToggleSearch: $('#btn-toggle-search'),
     btnToggleReaderAutoHide: $('#btn-toggle-reader-auto-hide'),
+    readerFlow: $('#reader-flow'),
     readerFontFamily: $('#reader-font-family'),
     readerFontSize: $('#reader-font-size'),
     readerFontSizeValue: $('#reader-font-size-value'),
@@ -537,6 +552,7 @@
   // ==================== VIEW SWITCHING ====================
 
   async function saveCurrentProgress() {
+    await flushScrolledProgress();
     if (!currentBookMeta || !currentCfi) return;
     currentBookMeta.last_cfi = currentCfi;
     await dbPut('books', currentBookMeta);
@@ -649,6 +665,8 @@
 
   async function leaveReader() {
     await saveCurrentProgress();
+    renditionGeneration += 1;
+    readerFlowChangeToken += 1;
     if (currentRendition) {
       try { currentRendition.destroy(); } catch (_e) { /* already destroyed */ }
       currentRendition = null;
@@ -664,6 +682,13 @@
     currentCfi = '';
     currentChapter = '';
     currentChapterId = '';
+    stableReaderLocation = null;
+    pendingLayoutAnchor = '';
+    pendingLayoutRefresh = false;
+    activeReaderOperationToken = 0;
+    isLayoutRefreshing = false;
+    if (layoutRefreshTimer) clearTimeout(layoutRefreshTimer);
+    layoutRefreshTimer = null;
     pendingSelection = null;
     progressJumpToken = 0;
     _boundIframeDocuments = new WeakSet();
@@ -1000,47 +1025,52 @@
     }
   }
 
+  async function resolveTocTarget(item) {
+    const href = String(item && item.href || '');
+    if (!href || href.includes('#')) return { target: href, section: null };
+    const section = currentBook && currentBook.spine && currentBook.spine.get(href);
+    if (!section) return { target: href, section: null };
+    try {
+      await section.load(currentBook.load.bind(currentBook));
+      if (typeof section.cfiFromElement === 'function' && section.document && section.document.body) {
+        const firstContent = section.document.body.firstElementChild || section.document.body;
+        return { target: section.cfiFromElement(firstContent) || href, section };
+      }
+    } catch (err) {
+      console.warn('Chapter anchor could not be resolved:', err);
+    }
+    return { target: href, section };
+  }
+
   async function gotoTocItem(item) {
     if (!currentRendition || !item || !item.href) return;
+    const { target, section } = await resolveTocTarget(item);
+    const operationToken = beginReaderOperation();
+    const targetHref = normalizeReaderHref(item.href);
     try {
-      await currentRendition.display(item.href);
+      await currentRendition.display(target);
+      if (!isCurrentReaderOperation(operationToken)) return;
+      if (currentReaderFlow === 'scrolled' && section && section.href) {
+        await waitForAnimationFrames();
+        const views = currentRendition.manager && currentRendition.manager.views;
+        const view = views && (views.find(section) || views.find(section.href));
+        const scroller = getReaderScroller();
+        if (view && view.element && scroller) {
+          const viewTop = view.element.offsetTop || view.element.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+          scroller.scrollTop = Math.max(0, viewTop);
+        }
+      }
+      await waitForContinuousSettle(operationToken);
+      if (!isCurrentReaderOperation(operationToken)) return;
+      const location = commitCurrentReaderLocation(operationToken);
+      const locationHref = location && location.start && normalizeReaderHref(location.start.href);
+      if (locationHref !== targetHref) return;
     } catch (err) {
+      if (!isCurrentReaderOperation(operationToken)) return;
       console.warn('Failed to navigate to chapter:', err);
       showToast('无法打开该章节', 'warning');
-      return;
-    }
-
-    await new Promise(resolve => window.setTimeout(resolve, 40));
-    const location = currentRendition.currentLocation();
-    if (location && location.start) handleLocationChange(location);
-    const targetSection = currentBook && currentBook.spine && currentBook.spine.get(item.href);
-    const targetHref = normalizeReaderHref(item.href);
-    const locationHref = location && location.start && normalizeReaderHref(location.start.href);
-    let anchorCfi = location && location.start && location.start.cfi &&
-      (locationHref === targetHref || locationHref.endsWith('/' + targetHref) || targetHref.endsWith('/' + locationHref))
-      ? location.start.cfi
-      : '';
-    if ((!anchorCfi || normalizeReaderHref(currentChapterId) !== targetHref) && targetSection) {
-      try {
-        await targetSection.load(currentBook.load.bind(currentBook));
-        if (typeof targetSection.cfiFromElement === 'function' && targetSection.document && targetSection.document.body) {
-          anchorCfi = targetSection.cfiFromElement(targetSection.document.body);
-        }
-      } catch (err) {
-        console.warn('Chapter anchor could not be resolved:', err);
-      }
-    }
-    if (!anchorCfi) anchorCfi = getCurrentAnchorCfi();
-    if (anchorCfi && currentBookMeta) {
-      const percent = getLocationCount(currentRendition.book && currentRendition.book.locations) > 0
-        ? percentageFromCfi(anchorCfi)
-        : null;
-      try {
-        await persistReaderProgress(anchorCfi, percent, { force: true });
-      } catch (err) {
-        console.warn('Chapter opened but its position could not be saved:', err);
-        showToast('章节已打开，当前位置将在稍后重试保存', 'warning');
-      }
+    } finally {
+      finishReaderOperation(operationToken);
     }
     if (isMobileLayout()) setReaderNavigatorOpen(false);
   }
@@ -2027,6 +2057,8 @@
 
   async function openBook(bookMeta, { skipSync = false } = {}) {
     currentBookMeta = bookMeta;
+    stableReaderLocation = null;
+    pendingLayoutAnchor = '';
     await navigateToRoute('/reader');
     setReaderLoading('正在打开书籍…', '正在准备阅读器');
     setLoadingProgress(5);
@@ -2088,37 +2120,9 @@
       lastPageInfo = null;
       setLoadingProgress(10);
 
-      const rendition = book.renderTo(dom.epubContainer, {
-        width: '100%',
-        height: '100%',
-        spread: 'none',
-        flow: 'paginated',
-      });
-      if (!dom.readerLoading.isConnected) dom.epubContainer.appendChild(dom.readerLoading);
-      currentRendition = rendition;
-      _boundIframeDocuments = new WeakSet();
-      applyReaderTypography({ refresh: false });
-
-      // Track chapter/location changes
-      rendition.on('relocated', (location) => {
-        hideSelectionToolbar();
-        handleLocationChange(location);
-        clearSearchHighlights();
-        setupIframeNavigation();  // re-attach if iframe was recreated
-        restoreHighlights();      // re-apply highlights on new page
-      });
-
-      rendition.on('rendered', () => {
-        setupIframeNavigation();
-      });
-
-      // Setup highlight selection handling
-      setupSelectionHandling(rendition);
-
-      // Restore saved CFI or start from beginning
       const startCfi = bookMeta.last_cfi || undefined;
       setLoadingProgress(65);
-      await rendition.display(startCfi);
+      await createReaderRendition(startCfi);
       syncReaderLocation();
       setupIframeNavigation();
       restoreHighlights();
@@ -2129,10 +2133,10 @@
 
       // Full-book location generation can take minutes for large EPUBs. It is
       // useful for percentages and jumps, but must never block the first page.
-      dom.pageText.textContent = '正在计算页码…';
+      dom.pageText.textContent = currentReaderFlow === 'scrolled' ? '滚动阅读' : '正在计算页码…';
       warmLocationsWithProgress(book).catch((err) => {
         console.warn('Location generation failed:', err);
-        dom.pageText.textContent = '页码暂不可用';
+        dom.pageText.textContent = currentReaderFlow === 'scrolled' ? '滚动阅读' : '页码暂不可用';
       });
 
       // Load bookmarks/navigation for chapter titles
@@ -2140,6 +2144,7 @@
         currentBook._toc = Array.isArray(nav.toc) ? nav.toc : [];
         renderTableOfContents(currentBook._toc);
         updateTocActiveState(currentChapterId);
+        if (stableReaderLocation) updateChapterLabel(stableReaderLocation);
       }).catch((err) => {
         console.warn('EPUB navigation load failed:', err);
         renderTableOfContents([]);
@@ -2161,6 +2166,147 @@
     }
   }
 
+  function updateReaderFlowUI() {
+    if (dom.readerFlow) dom.readerFlow.value = currentReaderFlow;
+    if (dom.readerView) dom.readerView.dataset.readerFlow = currentReaderFlow;
+  }
+
+  function loadReaderFlowPreference() {
+    let saved = 'paginated';
+    try {
+      saved = localStorage.getItem(READER_FLOW_KEY) || 'paginated';
+    } catch (_err) {
+      saved = 'paginated';
+    }
+    currentReaderFlow = READER_FLOWS.has(saved) ? saved : 'paginated';
+    updateReaderFlowUI();
+  }
+
+  function persistReaderFlowPreference() {
+    try {
+      localStorage.setItem(READER_FLOW_KEY, currentReaderFlow);
+    } catch (_err) {
+      // The preference remains active for this session if storage is blocked.
+    }
+  }
+
+  function getReaderScroller(rendition = currentRendition) {
+    const manager = rendition && rendition.manager;
+    return manager && manager.container || null;
+  }
+
+  function configureReaderScroller(rendition) {
+    const scroller = getReaderScroller(rendition);
+    if (!scroller) return;
+    if (currentReaderFlow === 'scrolled') {
+      scroller.style.overflowY = 'auto';
+      scroller.style.overflowX = 'hidden';
+      scroller.style.touchAction = 'pan-y pinch-zoom';
+      scroller.style.overscrollBehaviorY = 'contain';
+    } else {
+      scroller.style.overflowY = 'hidden';
+      scroller.style.overflowX = 'hidden';
+      scroller.style.touchAction = 'pan-y pinch-zoom';
+    }
+  }
+
+  async function createReaderRendition(targetCfi) {
+    if (!currentBook) return null;
+    const generation = ++renditionGeneration;
+    const bounds = dom.epubContainer.getBoundingClientRect();
+    const options = {
+      width: Math.max(1, Math.floor(bounds.width || dom.epubContainer.clientWidth || 1)),
+      height: Math.max(1, Math.floor(bounds.height || dom.epubContainer.clientHeight || 1)),
+      spread: 'none',
+      flow: currentReaderFlow,
+    };
+    if (currentReaderFlow === 'scrolled') options.manager = 'continuous';
+    const rendition = currentBook.renderTo(dom.epubContainer, options);
+    if (!dom.readerLoading.isConnected) dom.epubContainer.appendChild(dom.readerLoading);
+    currentRendition = rendition;
+    _boundIframeDocuments = new WeakSet();
+    applyReaderTypography({ refresh: false });
+    configureReaderScroller(rendition);
+
+    rendition.on('relocated', (location) => {
+      if (generation !== renditionGeneration || rendition !== currentRendition) return;
+      hideSelectionToolbar();
+      if (!isReaderOperationActive()) handleLocationChange(location);
+      clearSearchHighlights();
+      setupIframeNavigation();
+      restoreHighlights();
+    });
+
+    rendition.on('rendered', () => {
+      if (generation !== renditionGeneration || rendition !== currentRendition) return;
+      configureReaderScroller(rendition);
+      setupIframeNavigation();
+      applyReaderTypography({ refresh: false });
+    });
+
+    setupSelectionHandling(rendition);
+    const operationToken = beginReaderOperation();
+    try {
+      await rendition.display(targetCfi || undefined);
+      if (generation !== renditionGeneration || rendition !== currentRendition || !isCurrentReaderOperation(operationToken)) {
+        return null;
+      }
+      await waitForContinuousSettle(operationToken);
+      if (!isCurrentReaderOperation(operationToken)) return null;
+      configureReaderScroller(rendition);
+      commitCurrentReaderLocation(operationToken);
+      return rendition;
+    } finally {
+      finishReaderOperation(operationToken);
+    }
+  }
+
+  async function setReaderFlow(value, { persist = true } = {}) {
+    const nextFlow = READER_FLOWS.has(value) ? value : 'paginated';
+    if (nextFlow === currentReaderFlow) {
+      updateReaderFlowUI();
+      return;
+    }
+    const anchorCfi = getCurrentAnchorCfi();
+    const changeToken = ++readerFlowChangeToken;
+    await flushScrolledProgress();
+    if (!anchorCfi && currentBookMeta) currentBookMeta.last_cfi = currentCfi;
+    currentReaderFlow = nextFlow;
+    updateReaderFlowUI();
+    if (persist) persistReaderFlowPreference();
+    lastPageInfo = null;
+    resetWheelGesture();
+    if (!currentBook || !currentRendition) {
+      updatePageUI();
+      return;
+    }
+
+    setReaderLoading(`正在切换到${nextFlow === 'scrolled' ? '滚动' : '翻页'}阅读…`, '正在恢复当前位置');
+    const previousRendition = currentRendition;
+    renditionGeneration += 1;
+    currentRendition = null;
+    try { previousRendition.destroy(); } catch (_err) { /* already destroyed */ }
+    Array.from(dom.epubContainer.children).forEach((child) => {
+      if (child !== dom.readerLoading) child.remove();
+    });
+    if (!dom.readerLoading.isConnected) dom.epubContainer.appendChild(dom.readerLoading);
+
+    try {
+      const rendition = await createReaderRendition(anchorCfi);
+      if (!rendition || changeToken !== readerFlowChangeToken) return;
+      syncReaderLocation();
+      setupIframeNavigation();
+      restoreHighlights();
+      hideReaderLoading();
+      scheduleReaderChromeHide();
+    } catch (err) {
+      if (changeToken !== readerFlowChangeToken) return;
+      hideReaderLoading();
+      console.error('Reader flow switch failed:', err);
+      showToast('阅读模式切换失败，请重试', 'error');
+    }
+  }
+
   function percentageFromCfi(cfi) {
     if (!cfi || !currentRendition || !currentRendition.book || !currentRendition.book.locations) return null;
     try {
@@ -2172,51 +2318,153 @@
     return null;
   }
 
-  function handleLocationChange(location) {
-    if (!location || !location.start) return;
+  function locationProgress(location) {
+    if (!location || !location.start) return null;
+    let percent = location.start.percentage;
+    if (percent == null) percent = percentageFromCfi(location.start.cfi);
+    return percent == null ? null : Math.round(percent * 100);
+  }
+
+  function beginReaderOperation() {
+    const token = ++readerOperationToken;
+    activeReaderOperationToken = token;
+    isLayoutRefreshing = true;
+    if (layoutRefreshTimer) {
+      clearTimeout(layoutRefreshTimer);
+      layoutRefreshTimer = null;
+    }
+    pendingLayoutAnchor = '';
+    pendingLayoutRefresh = false;
+    return token;
+  }
+
+  function isCurrentReaderOperation(token) {
+    return token === readerOperationToken && Boolean(currentRendition);
+  }
+
+  function isReaderOperationActive() {
+    return activeReaderOperationToken !== 0;
+  }
+
+  function finishReaderOperation(token) {
+    if (activeReaderOperationToken === token) activeReaderOperationToken = 0;
+    if (token === readerOperationToken) {
+      isLayoutRefreshing = false;
+      if (pendingLayoutRefresh) {
+        pendingLayoutRefresh = false;
+        refreshReaderLayout();
+      }
+    }
+  }
+
+  function waitForAnimationFrames() {
+    return new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
+  }
+
+  async function waitForContinuousSettle(token) {
+    if (currentReaderFlow !== 'scrolled') return;
+    const scroller = getReaderScroller();
+    let previousScrollTop = scroller ? scroller.scrollTop : 0;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await new Promise(resolve => window.setTimeout(resolve, CONTINUOUS_SETTLE_MS));
+      if (!isCurrentReaderOperation(token)) return;
+      await waitForAnimationFrames();
+      if (!scroller || Math.abs(scroller.scrollTop - previousScrollTop) < 1) return;
+      previousScrollTop = scroller.scrollTop;
+    }
+  }
+
+  function readCurrentReaderLocation() {
+    try {
+      return currentRendition && typeof currentRendition.currentLocation === 'function'
+        ? currentRendition.currentLocation()
+        : null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function commitCurrentReaderLocation(token) {
+    if (token != null && !isCurrentReaderOperation(token)) return null;
+    const location = readCurrentReaderLocation();
+    if (!location || !location.start) return null;
+    handleLocationChange(location, { force: true, persist: false });
+    const persistCommittedLocation = () => persistReaderLocation(location).catch(() => {});
+    if (isReaderOperationActive()) setTimeout(persistCommittedLocation, 0);
+    else persistCommittedLocation();
+    return location;
+  }
+
+  async function persistReaderLocation(location) {
+    if (!location || !location.start || !currentBookMeta || isReaderOperationActive()) return;
+    const cfi = location.start.cfi;
+    const pct = locationProgress(location);
+    if (!cfi || pct == null) return;
+    const locations = currentRendition && currentRendition.book
+      ? currentRendition.book.locations
+      : null;
+    const hasStableBookPercentage = getLocationCount(locations) > 0;
+    const storedProgress = Number(currentBookMeta.progress_percent || 0);
+    const transferredProgress = Number(currentBookMeta.transfer_preserved_progress || 0);
+    const protectedProgress = Math.max(storedProgress, transferredProgress);
+    const isProvisionalDowngrade =
+      pct < transferredProgress || (!hasStableBookPercentage && pct < protectedProgress);
+    if (isProvisionalDowngrade) return;
+
+    delete currentBookMeta.transfer_preserved_progress;
+    delete currentBookMeta.transfer_preserved_cfi;
+    currentBookMeta.progress_percent = pct;
+    currentBookMeta.last_cfi = cfi;
+    await dbPut('books', currentBookMeta);
+    if (currentBookMeta.server_book_id || currentBookMeta.source === 'server') {
+      await queueReaderSync(currentBookMeta.id, 'progress.set', '', {
+        cfi,
+        progress_percent: pct,
+        last_opened: currentBookMeta.last_opened || Date.now(),
+      });
+    }
+  }
+
+  function scheduleScrolledProgress(location) {
+    pendingScrolledLocation = location;
+    if (scrolledProgressTimer) clearTimeout(scrolledProgressTimer);
+    scrolledProgressTimer = setTimeout(() => {
+      scrolledProgressTimer = null;
+      const pending = pendingScrolledLocation;
+      pendingScrolledLocation = null;
+      persistReaderLocation(pending).catch(() => {});
+    }, SCROLLED_PROGRESS_DEBOUNCE_MS);
+  }
+
+  async function flushScrolledProgress() {
+    if (scrolledProgressTimer) {
+      clearTimeout(scrolledProgressTimer);
+      scrolledProgressTimer = null;
+    }
+    const pending = pendingScrolledLocation;
+    pendingScrolledLocation = null;
+    if (pending) await persistReaderLocation(pending);
+  }
+
+  function handleLocationChange(location, { force = false, persist = true } = {}) {
+    if (!location || !location.start || (isReaderOperationActive() && !force)) return;
+    stableReaderLocation = location;
     currentCfi = location.start.cfi;
     const nextChapterId = String(location.start.href || '').split('#', 1)[0];
     if (nextChapterId) currentChapterId = nextChapterId;
     updateTocActiveState(location.start.href || '');
-    let percent = location.start.percentage;
-    if (percent == null) {
-      percent = percentageFromCfi(currentCfi);
-    }
-    if (percent == null) return;
-    const pct = Math.round(percent * 100);
-
-    // Update progress UI
-    dom.progressText.textContent = pct + '%';
-    updatePageUI();
-
-    // Save progress to DB
-    if (currentBookMeta && !isLayoutRefreshing) {
-      const locations = currentRendition && currentRendition.book
-        ? currentRendition.book.locations
-        : null;
-      const hasStableBookPercentage = getLocationCount(locations) > 0;
-      const storedProgress = Number(currentBookMeta.progress_percent || 0);
-      const transferredProgress = Number(currentBookMeta.transfer_preserved_progress || 0);
-      const protectedProgress = Math.max(storedProgress, transferredProgress);
-      const isProvisionalDowngrade =
-        pct < transferredProgress || (!hasStableBookPercentage && pct < protectedProgress);
-      if (!isProvisionalDowngrade) {
-        delete currentBookMeta.transfer_preserved_progress;
-        delete currentBookMeta.transfer_preserved_cfi;
-        currentBookMeta.progress_percent = pct;
-        currentBookMeta.last_cfi = currentCfi;
-        dbPut('books', currentBookMeta).catch(() => {});
-        if (currentBookMeta.server_book_id || currentBookMeta.source === 'server') {
-          queueReaderSync(currentBookMeta.id, 'progress.set', '', {
-            cfi: currentCfi,
-            progress_percent: pct,
-            last_opened: currentBookMeta.last_opened || Date.now(),
-          }).catch(() => {});
+    const pct = locationProgress(location);
+    if (pct != null) {
+      dom.progressText.textContent = pct + '%';
+      updatePageUI();
+      if (persist) {
+        if (currentReaderFlow === 'scrolled') {
+          scheduleScrolledProgress(location);
+        } else {
+          persistReaderLocation(location).catch(() => {});
         }
       }
     }
-
-    // Try to get chapter title from TOC
     updateChapterLabel(location);
   }
 
@@ -2286,44 +2534,45 @@
     updateProgressUI();
   }
 
-  function refreshReaderLayout() {
+  function refreshReaderLayout({ anchorCfi: requestedAnchor } = {}) {
     if (!currentRendition || !dom.epubContainer) return;
-    const refreshToken = ++layoutRefreshToken;
-    const navigationToken = pageNavigationToken;
-    const anchorCfi = getCurrentAnchorCfi();
-    isLayoutRefreshing = true;
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        try {
-          if (refreshToken !== layoutRefreshToken || !currentRendition) return;
-          const rect = dom.epubContainer.getBoundingClientRect();
-          if (typeof currentRendition.resize === 'function' && rect.width > 0 && rect.height > 0) {
-            currentRendition.resize(rect.width, rect.height);
-          }
-          restoreLayoutAnchor(anchorCfi, refreshToken, navigationToken);
-          updateProgressUI();
-        } catch (err) {
-          console.warn('Reader layout refresh failed:', err);
-        } finally {
-          window.setTimeout(() => {
-            if (refreshToken === layoutRefreshToken) {
-              isLayoutRefreshing = false;
-            }
-          }, 500);
-        }
-      });
-    });
+    if (isReaderOperationActive()) {
+      pendingLayoutRefresh = true;
+      return;
+    }
+    if (!pendingLayoutAnchor) pendingLayoutAnchor = requestedAnchor || getCurrentAnchorCfi();
+    if (layoutRefreshTimer) clearTimeout(layoutRefreshTimer);
+    layoutRefreshTimer = window.setTimeout(async () => {
+      layoutRefreshTimer = null;
+      if (!currentRendition) return;
+      const anchorCfi = pendingLayoutAnchor;
+      pendingLayoutAnchor = '';
+      const operationToken = beginReaderOperation();
+      try {
+        const rect = dom.epubContainer.getBoundingClientRect();
+        const width = Math.floor(rect.width);
+        const height = Math.floor(rect.height);
+        if (width < 2 || height < 2) return;
+        if (typeof currentRendition.resize === 'function') currentRendition.resize(width, height);
+        await waitForAnimationFrames();
+        if (!isCurrentReaderOperation(operationToken)) return;
+        if (anchorCfi) await currentRendition.display(anchorCfi);
+        if (!isCurrentReaderOperation(operationToken)) return;
+        await waitForContinuousSettle(operationToken);
+        if (!isCurrentReaderOperation(operationToken)) return;
+        commitCurrentReaderLocation(operationToken);
+      } catch (err) {
+        if (isCurrentReaderOperation(operationToken)) console.warn('Reader layout refresh failed:', err);
+      } finally {
+        finishReaderOperation(operationToken);
+      }
+    }, READER_LAYOUT_DEBOUNCE_MS);
   }
 
   function getCurrentAnchorCfi() {
-    try {
-      const loc = currentRendition && typeof currentRendition.currentLocation === 'function'
-        ? currentRendition.currentLocation()
-        : null;
-      return (loc && loc.start && loc.start.cfi) || currentCfi || '';
-    } catch (_err) {
-      return currentCfi || '';
-    }
+    return (stableReaderLocation && stableReaderLocation.start && stableReaderLocation.start.cfi)
+      || currentCfi
+      || '';
   }
 
   function normalizeReaderFontSize(value) {
@@ -2423,7 +2672,7 @@
   }
 
   function applyReaderTypography({ refresh = true } = {}) {
-    const anchorCfi = getCurrentAnchorCfi();
+    if (refresh && currentRendition && !pendingLayoutAnchor) pendingLayoutAnchor = getCurrentAnchorCfi();
     if (currentRendition && currentRendition.themes) {
       currentRendition.themes.fontSize(`${currentFontSize}%`);
     }
@@ -2434,9 +2683,7 @@
         // Ignore inaccessible or not-yet-ready rendition frames.
       }
     }
-    if (refresh && currentRendition) {
-      refreshReaderLayout({ anchorCfi });
-    }
+    if (refresh && currentRendition) refreshReaderLayout({ anchorCfi: pendingLayoutAnchor });
   }
 
   function setReaderFontSize(value, { persist = true } = {}) {
@@ -2477,25 +2724,6 @@
     applyReaderTypography();
   }
 
-  function restoreLayoutAnchor(anchorCfi, refreshToken, navigationToken) {
-    if (!anchorCfi || !currentRendition || typeof currentRendition.display !== 'function') return;
-    window.setTimeout(() => {
-      if (refreshToken !== layoutRefreshToken || !currentRendition) return;
-      if (navigationToken !== pageNavigationToken) return;
-      const currentAnchor = getCurrentAnchorCfi();
-      if (currentAnchor && currentAnchor === anchorCfi) return;
-      Promise.resolve(currentRendition.display(anchorCfi))
-        .then(() => {
-          if (refreshToken === layoutRefreshToken && navigationToken === pageNavigationToken) {
-            currentCfi = anchorCfi;
-            if (currentBookMeta) currentBookMeta.last_cfi = anchorCfi;
-            updateProgressUI();
-          }
-        })
-        .catch(err => console.warn('Reader anchor restore failed:', err));
-    }, 80);
-  }
-
   function getLocationCount(locations) {
     if (!locations) return 0;
     return typeof locations.length === 'function'
@@ -2504,6 +2732,7 @@
   }
 
   function getCurrentPageInfo() {
+    if (currentReaderFlow === 'scrolled') return null;
     try {
       const currentLoc = currentRendition && typeof currentRendition.currentLocation === 'function'
         ? currentRendition.currentLocation()
@@ -2541,6 +2770,12 @@
 
   function updatePageUI() {
     if (!dom.pageText) return;
+    if (currentReaderFlow === 'scrolled') {
+      const currentLocation = currentRendition && currentRendition.location;
+      const pct = locationProgress(currentLocation) ?? Number(currentBookMeta && currentBookMeta.progress_percent);
+      dom.pageText.textContent = Number.isFinite(pct) ? `滚动阅读 · ${Math.round(pct)}%` : '滚动阅读';
+      return;
+    }
     const pageInfo = getCurrentPageInfo();
     const stablePageInfo = pageInfo || lastPageInfo;
     dom.pageText.textContent = stablePageInfo
@@ -2578,10 +2813,31 @@
     }
     releaseTransferredProgressFloor();
     pageNavigationInProgress = true;
-    pageNavigationToken += 1;
+    readerOperationToken += 1;
+    pendingLayoutAnchor = '';
+    if (layoutRefreshTimer) {
+      clearTimeout(layoutRefreshTimer);
+      layoutRefreshTimer = null;
+    }
 
     let navigation;
     try {
+      if (currentReaderFlow === 'scrolled') {
+        navigation = direction === 'next' ? currentRendition.next() : currentRendition.prev();
+        return Promise.resolve(navigation)
+          .then(() => {
+            syncReaderLocation();
+            return true;
+          })
+          .catch((err) => {
+            console.warn('Page navigation failed:', source, err);
+            return false;
+          })
+          .finally(() => {
+            window.setTimeout(() => { pageNavigationInProgress = false; }, PAGE_NAVIGATION_COOLDOWN);
+          });
+      }
+
       // Boundary guard: detect cross-section edges and use display() instead of next()/prev()
       const currentLoc = currentRendition.currentLocation();
       let spineItem = null;
@@ -2610,13 +2866,11 @@
 
       if (direction === 'next' && atForwardBoundary && spineItem && spineItem.next()) {
         // Cross-section forward: display next section from start
-        pageNavigationToken += 1;
         const nextSpine = spineItem.next();
         console.log('Cross-section forward:', currentSectionHref, '\u2192', nextSpine.href);
         navigation = currentRendition.display(nextSpine.href, false);
       } else if (direction === 'prev' && atBackwardBoundary && spineItem && spineItem.prev()) {
         // Cross-section backward: let epub.js move to the previous spine tail.
-        pageNavigationToken += 1;
         const prevSpine = spineItem.prev();
         console.log('Cross-section backward:', currentSectionHref, '\u2192', prevSpine.href);
         navigation = currentRendition.prev();
@@ -2763,6 +3017,7 @@
       }
     });
     const isBlocked = () => (
+      currentReaderFlow === 'scrolled' ||
       hasOpenReaderSurface() ||
       Boolean(pendingSelection) ||
       !dom.selectionToolbar.hidden ||
@@ -2886,15 +3141,19 @@
       )
     );
 
-    // Keyboard: arrow keys for page turning
+    // Keyboard: horizontal navigation in both modes; vertical scrolling in continuous mode.
     doc.addEventListener('keydown', (e) => {
       if (!currentRendition) return;
       if (e.repeat || isEditableTarget(e.target)) return;
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      if (currentReaderFlow === 'scrolled' && handleReaderScrollKey(e)) {
+        e.stopPropagation();
+        return;
+      }
+      if (e.key === 'ArrowRight' || (currentReaderFlow === 'paginated' && e.key === 'ArrowDown')) {
         e.preventDefault();
         e.stopPropagation();
         navigatePage('next', 'iframe-keyboard');
-      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      } else if (e.key === 'ArrowLeft' || (currentReaderFlow === 'paginated' && e.key === 'ArrowUp')) {
         e.preventDefault();
         e.stopPropagation();
         navigatePage('prev', 'iframe-keyboard');
@@ -2923,10 +3182,16 @@
       requestReaderChromeToggle();
     });
 
-    // Wheel page flip on iframe (with Ctrl+wheel font zoom)
+    // Wheel page flip in paginated mode; native-feeling vertical scroll in continuous mode.
     doc.addEventListener('wheel', (e) => {
       if (e.ctrlKey || e.metaKey) {
         handleFontZoom(e);
+      } else if (currentReaderFlow === 'scrolled') {
+        const scroller = getReaderScroller();
+        if (scroller) {
+          e.preventDefault();
+          scroller.scrollTop += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+        }
       } else {
         handleWheelPageFlip(e);
       }
@@ -3401,6 +3666,21 @@
   }
 
   // ==================== WHEEL PAGE FLIP ====================
+  function handleReaderScrollKey(event) {
+    if (currentReaderFlow !== 'scrolled') return false;
+    const scroller = getReaderScroller();
+    if (!scroller) return false;
+    const line = 48;
+    const screen = Math.max(120, scroller.clientHeight - 96);
+    if (event.key === 'ArrowDown') scroller.scrollTop += line;
+    else if (event.key === 'ArrowUp') scroller.scrollTop -= line;
+    else if (event.key === 'PageDown') scroller.scrollTop += screen;
+    else if (event.key === 'PageUp') scroller.scrollTop -= screen;
+    else return false;
+    event.preventDefault();
+    return true;
+  }
+
   function resetWheelGesture() {
     wheelAccumulatedDelta = 0;
     wheelGestureLocked = false;
@@ -3726,6 +4006,7 @@
 
   function setupSelectionHandling(rendition) {
     rendition.on('selected', (cfiRange, contents) => {
+      if (rendition !== currentRendition) return;
       const range = rendition.getRange(cfiRange);
       if (!range) return;
       if (!setPendingSelectionFromRange(
@@ -3740,7 +4021,9 @@
     // Hide only after a genuine click-away. Mobile browsers can emit click
     // while the native selection handles are still settling.
     rendition.on('click', () => {
+      if (rendition !== currentRendition) return;
       setTimeout(() => {
+        if (rendition !== currentRendition) return;
         const iframe = dom.epubContainer.querySelector('iframe');
         const selection = iframe && iframe.contentDocument
           ? iframe.contentDocument.getSelection()
@@ -3752,15 +4035,18 @@
     });
 
     // Handle clicks on the EPUB host controls outside the iframe.
-    dom.epubContainer.addEventListener('click', () => {
-      setTimeout(() => {
-        const selection = window.getSelection();
-        if (!hasSelectionText(selection) && Date.now() >= selectionInteractionUntil) {
-          clearSelection(selection);
-          hideSelectionToolbar();
-        }
-      }, 100);
-    });
+    if (!dom.epubContainer.dataset.selectionClickBound) {
+      dom.epubContainer.dataset.selectionClickBound = 'true';
+      dom.epubContainer.addEventListener('click', () => {
+        setTimeout(() => {
+          const selection = window.getSelection();
+          if (!hasSelectionText(selection) && Date.now() >= selectionInteractionUntil) {
+            clearSelection(selection);
+            hideSelectionToolbar();
+          }
+        }, 100);
+      });
+    }
   }
 
   function getIframeForContents(contents) {
@@ -5276,17 +5562,13 @@
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (controllerChanged) return;
       controllerChanged = true;
-      if (!currentBookMeta && serverMigrationsInFlight.size === 0) {
-        window.location.reload();
-        return;
-      }
       setOperationStatus({
         message: 'E-书痕已更新',
         detail: '当前操作不会被打断，请稍后刷新页面使用新版本',
       });
     });
 
-    navigator.serviceWorker.register('sw.js?v=40')
+    navigator.serviceWorker.register('sw.js?v=42')
       .then((reg) => {
         console.log('Service Worker registered:', reg.scope);
         reg.update().catch(() => {});
@@ -5458,6 +5740,9 @@
     dom.btnToggleReaderAutoHide.addEventListener('click', () => {
       setReaderChromeAutoHideEnabled(!readerChromeAutoHideEnabled);
     });
+    dom.readerFlow.addEventListener('change', () => {
+      setReaderFlow(dom.readerFlow.value);
+    });
     dom.readerFontFamily.addEventListener('change', () => {
       setReaderFontFamily(dom.readerFontFamily.value);
     });
@@ -5550,14 +5835,15 @@
         }
         return;
       }
-      // Arrow keys: page navigation (only when reader is active)
+      // Reader keyboard navigation (only when reader is active)
       if (dom.readerView.classList.contains('active') && currentRendition && !e.repeat && !isEditableTarget(e.target)) {
-        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        if (handleReaderScrollKey(e)) return;
+        if (e.key === 'ArrowRight' || (currentReaderFlow === 'paginated' && e.key === 'ArrowDown')) {
           e.preventDefault();
           navigatePage('next', 'document-keyboard');
           return;
         }
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        if (e.key === 'ArrowLeft' || (currentReaderFlow === 'paginated' && e.key === 'ArrowUp')) {
           e.preventDefault();
           navigatePage('prev', 'document-keyboard');
           return;
@@ -5600,10 +5886,14 @@
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
         cancelReaderChromeHide();
+        flushScrolledProgress().catch(() => {});
         return;
       }
       if (navigator.onLine) syncToBackend().catch(() => {});
       if (dom.readerView.classList.contains('active')) scheduleReaderChromeHide();
+    });
+    window.addEventListener('pagehide', () => {
+      flushScrolledProgress().catch(() => {});
     });
   }
 
@@ -5620,6 +5910,7 @@
 
     loadReaderChromeAutoHidePreference();
     loadReaderTypographyPreference();
+    loadReaderFlowPreference();
     setReaderNavigatorOpen(false);
     observeReaderIframes();
     bindEvents();
