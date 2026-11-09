@@ -3225,6 +3225,18 @@
       navigatePageWhenReady(deltaX < 0 ? 'next' : 'prev', source);
       return true;
     };
+    const scrollContinuousReaderFromGesture = (gesture, clientY, event) => {
+      if (currentReaderFlow !== 'scrolled' || gesture.intent !== 'vertical') return false;
+      const scroller = getReaderScroller();
+      if (!scroller) return false;
+      const deltaY = gesture.lastY - clientY;
+      gesture.lastY = clientY;
+      if (!deltaY) return false;
+      scroller.scrollTop += deltaY;
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+      return true;
+    };
 
     gestureTarget.addEventListener('touchstart', (event) => {
       if (
@@ -3266,7 +3278,6 @@
       const absX = Math.abs(deltaX);
       const absY = Math.abs(deltaY);
       touchStart.lastX = touch.clientX;
-      touchStart.lastY = touch.clientY;
 
       if (touchStart.blocked || isReaderGestureBlocked()) {
         touchStart.blocked = true;
@@ -3288,6 +3299,7 @@
         }
         lastReaderTap = null;
       }
+      if (scrollContinuousReaderFromGesture(touchStart, touch.clientY, event)) return;
       if (touchStart.intent === 'horizontal') {
         setGestureDebug(`touchmove 横向 ${Math.round(deltaX)}px`);
         event.preventDefault();
@@ -3454,7 +3466,6 @@
         const absX = Math.abs(deltaX);
         const absY = Math.abs(deltaY);
         windowTouchStart.lastX = touch.clientX;
-        windowTouchStart.lastY = touch.clientY;
 
         if (windowTouchStart.blocked || isReaderGestureBlocked()) {
           windowTouchStart.blocked = true;
@@ -3473,6 +3484,7 @@
             windowTouchStart.intent = 'diagonal';
           }
         }
+        if (scrollContinuousReaderFromGesture(windowTouchStart, touch.clientY, event)) return;
         if (windowTouchStart.intent !== 'horizontal') return;
 
         setGestureDebug(`window touchmove 横向 ${Math.round(deltaX)}px`);
@@ -3548,6 +3560,7 @@
         id: event.pointerId,
         x: event.clientX,
         y: event.clientY,
+        lastY: event.clientY,
         at: Date.now(),
         hadSelection,
         intent: null,
@@ -3586,6 +3599,7 @@
         }
         lastReaderTap = null;
       }
+      if (scrollContinuousReaderFromGesture(pointerStart, event.clientY, event)) return;
       if (pointerStart.intent !== 'horizontal') return;
 
       setGestureDebug(`pointermove 横向 ${Math.round(deltaX)}px`);
