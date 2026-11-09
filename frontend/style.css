@@ -1021,6 +1021,7 @@ body.reader-active .operation-status {
 
 .reader-typography-heading,
 .reader-typography-fields,
+.reader-flow-field,
 .reader-font-family-field,
 .reader-font-size-field,
 .reader-spacing-field {
@@ -1038,6 +1039,7 @@ body.reader-active .operation-status {
 }
 
 .reader-typography-heading span,
+.reader-flow-field > span,
 .reader-font-family-field > span,
 .reader-typography-value-row {
   color: var(--ink-muted);
@@ -1048,11 +1050,12 @@ body.reader-active .operation-status {
 
 .reader-typography-fields {
   display: grid;
-  grid-template-columns: minmax(130px, 0.65fr) minmax(300px, 1.5fr) repeat(2, minmax(200px, 1fr));
+  grid-template-columns: repeat(2, minmax(110px, 0.55fr)) minmax(280px, 1.45fr) repeat(2, minmax(190px, 1fr));
   align-items: end;
   gap: 12px;
 }
 
+.reader-flow-field,
 .reader-font-family-field,
 .reader-font-size-field,
 .reader-spacing-field {
@@ -1060,12 +1063,14 @@ body.reader-active .operation-status {
   gap: 5px;
 }
 
+.reader-flow-field > span,
 .reader-font-family-field > span,
 .reader-typography-value-row span {
   color: var(--ink-soft);
   font-weight: 700;
 }
 
+.reader-flow-field select,
 .reader-font-family-field select {
   width: 100%;
   min-height: 40px;
@@ -1571,6 +1576,17 @@ body.reader-active .operation-status {
   width: 100%;
   height: 100%;
   background: var(--paper);
+}
+
+#reader-view[data-reader-flow="scrolled"] .reader-epub-host > .epub-container {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  touch-action: pan-y pinch-zoom;
+  overscroll-behavior-y: contain;
+}
+
+#reader-view[data-reader-flow="scrolled"] .ios-reader-swipe-zone {
+  touch-action: pan-y pinch-zoom !important;
 }
 
 .reader-loading {
@@ -2715,7 +2731,7 @@ body.reader-chrome-hidden .reader-chrome-reveal {
   }
 
   .reader-typography-fields {
-    grid-template-columns: minmax(130px, 0.6fr) minmax(300px, 1.4fr);
+    grid-template-columns: repeat(2, minmax(130px, 0.6fr)) minmax(300px, 1.4fr);
   }
 
 }
@@ -2957,9 +2973,10 @@ body.reader-chrome-hidden .reader-chrome-reveal {
   }
 
   .reader-typography-fields {
-    grid-template-columns: minmax(130px, 0.7fr) minmax(0, 1.3fr);
+    grid-template-columns: repeat(2, minmax(130px, 0.7fr));
   }
 
+  .reader-flow-field select,
   .reader-font-family-field select,
   .reader-font-size-controls .btn,
   .reader-spacing-controls .btn {
@@ -3615,6 +3632,7 @@ body.reader-chrome-hidden .reader-chrome-reveal {
 }
 
 #reader-view .reader-typography-heading span,
+#reader-view .reader-flow-field > span,
 #reader-view .reader-font-family-field > span,
 #reader-view .reader-typography-value-row {
   color: var(--reader-text-secondary);

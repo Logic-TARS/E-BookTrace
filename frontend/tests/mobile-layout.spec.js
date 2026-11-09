@@ -475,6 +475,24 @@ test.describe('@mobile mobile layout', () => {
     expect(nextChapter).not.toBe(initialChapter);
   });
 
+  test('scrolls the continuous reader with a vertical touch swipe', async ({ page }) => {
+    await page.goto('/index.html');
+    await page.evaluate(() => localStorage.setItem('marginalia.readerFlow', 'scrolled'));
+    await page.reload();
+    await page.setInputFiles('#file-input', FIXTURE);
+    await expect(page.locator('#toolbar-book-title')).toContainText(/multichapter/i, { timeout: 15_000 });
+    await expect(page.locator('#reader-view')).toHaveAttribute('data-reader-flow', 'scrolled');
+    const readerScroller = page.locator('#epub-container > .epub-container');
+    await expect(readerScroller).toBeAttached();
+
+    await expect.poll(() => readerScroller.evaluate(scroller => scroller.scrollHeight - scroller.clientHeight))
+      .toBeGreaterThan(200);
+    const initialScrollTop = await readerScroller.evaluate(scroller => scroller.scrollTop);
+    await swipeReaderWithTouchscreen(page, { deltaY: -180 });
+    await expect.poll(() => readerScroller.evaluate(scroller => scroller.scrollTop))
+      .toBeGreaterThan(initialScrollTop);
+  });
+
   test('does not turn pages for vertical, diagonal, or long-press swipes', async ({ page }) => {
     await openFixture(page);
     await expect(page.locator('#page-text')).toHaveText(/第\s*\d+\s*\/\s*\d+\s*页/, { timeout: 15_000 });
