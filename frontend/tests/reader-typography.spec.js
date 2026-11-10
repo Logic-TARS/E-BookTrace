@@ -187,6 +187,16 @@ test.describe('reader typography settings', () => {
 
     await wheelFontSize(4, 3);
     await expect(page.locator('#reader-font-size-value')).toHaveText('95%');
+    const pageAfterZoom = await page.locator('#page-text').textContent();
+    await page.locator('#epub-container').evaluate((host) => {
+      const iframe = Array.from(host.querySelectorAll('iframe')).find(item => item.contentDocument?.body);
+      for (let index = 0; index < 12; index += 1) {
+        iframe.contentDocument.dispatchEvent(new WheelEvent('wheel', {
+          bubbles: true, cancelable: true, deltaY: 5,
+        }));
+      }
+    });
+    await expect(page.locator('#page-text')).toHaveText(pageAfterZoom);
     await page.waitForTimeout(700);
     await wheelFontSize(-4, 3);
     await expect(page.locator('#reader-font-size-value')).toHaveText('100%');
@@ -215,6 +225,23 @@ test.describe('reader typography settings', () => {
     await page.waitForTimeout(700);
     await wheelOverReader(-100);
     await expect(page.locator('#reader-font-size-value')).toHaveText('100%');
+  });
+
+  test('allows a new page flip immediately after Ctrl+wheel zoom', async ({ page }) => {
+    await openFixture(page);
+    const cdp = await page.context().newCDPSession(page);
+    const bounds = await page.locator('#epub-container').boundingBox();
+    const position = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+    const wheel = (deltaY, modifiers) => cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseWheel', ...position, deltaX: 0, deltaY, modifiers, pointerType: 'mouse',
+    });
+
+    await wheel(100, 2);
+    await expect(page.locator('#reader-font-size-value')).toHaveText('95%');
+    await page.waitForTimeout(220);
+    const before = await page.locator('#page-text').textContent();
+    await wheel(100, 0);
+    await expect(page.locator('#page-text')).not.toHaveText(before);
   });
 
   test('loads legacy font-only preferences with spacing defaults', async ({ page }) => {

@@ -3909,7 +3909,7 @@
     const delta = event.deltaY || event.detail || 0;
     if (!delta) return;
 
-    fontZoomLockUntil = Date.now() + WHEEL_IDLE_MS;
+    fontZoomLockUntil = Math.abs(delta) < WHEEL_DELTA_THRESHOLD ? Date.now() + WHEEL_IDLE_MS : 0;
     resetWheelGesture();
     if (fontZoomAccumulatedDelta && Math.sign(fontZoomAccumulatedDelta) !== Math.sign(delta)) {
       fontZoomAccumulatedDelta = 0;
@@ -5582,7 +5582,7 @@
       });
     });
 
-    navigator.serviceWorker.register('sw.js?v=42')
+    navigator.serviceWorker.register('sw.js?v=43')
       .then((reg) => {
         console.log('Service Worker registered:', reg.scope);
         reg.update().catch(() => {});
